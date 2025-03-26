@@ -44,7 +44,7 @@ This project allows you to generate LED animations in Python and send them to an
 
 1. Install required Python packages:
    ```bash
-   pip install pyserial
+   pip install -r requirements.txt
    ```
 
 2. Run an animation:
@@ -57,6 +57,18 @@ This project allows you to generate LED animations in Python and send them to an
 - **Rainbow**: Colorful rainbow pattern that moves along the strip
 - **Color Wipe**: Single colored dot that moves back and forth
 - **Pulse**: Entire strip pulsing with changing colors
+
+## Hardware Testing
+
+For hardware integration testing, use:
+
+```bash
+python -m python_scripts.hardware_test --port [YOUR_PORT]
+```
+
+This will automatically run through all animations to verify your hardware setup.
+
+See the [Hardware Testing Guide](HARDWARE_TESTING.md) for detailed information on setting up and testing the hardware.
 
 ## Adding Custom Animations
 

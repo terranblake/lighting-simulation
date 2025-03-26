@@ -11,9 +11,17 @@
 #define BAUD_RATE   115200
 #define HEADER_MARKER 0xAA
 
+// Debug mode (set to 1 to enable verbose output)
+#define DEBUG_MODE  1
+
 // Buffer for incoming data (3 bytes per LED for RGB values)
 uint8_t serialBuffer[NUM_LEDS * 3];
 CRGB leds[NUM_LEDS];
+
+// Statistics
+unsigned long frameCount = 0;
+unsigned long lastFrameTime = 0;
+float frameRate = 0;
 
 void setup() {
   // Initialize serial communication
@@ -30,6 +38,14 @@ void setup() {
   
   // Send ready signal
   Serial.println("READY");
+  
+  if (DEBUG_MODE) {
+    Serial.println("LED Animation Controller");
+    Serial.print("Number of LEDs: ");
+    Serial.println(NUM_LEDS);
+    Serial.print("LED Pin: ");
+    Serial.println(LED_PIN);
+  }
 }
 
 void loop() {
@@ -65,15 +81,48 @@ void loop() {
           }
           
           // Display the updated LEDs
+          unsigned long updateStart = millis();
           FastLED.show();
+          unsigned long updateTime = millis() - updateStart;
+          
+          // Calculate frame rate
+          unsigned long currentTime = millis();
+          if (lastFrameTime > 0) {
+            frameRate = 0.9 * frameRate + 0.1 * (1000.0 / (currentTime - lastFrameTime));
+          }
+          lastFrameTime = currentTime;
+          frameCount++;
           
           // Send acknowledgment
           Serial.write(0x01);
+          
+          // Print debug info every 30 frames
+          if (DEBUG_MODE && (frameCount % 30 == 0)) {
+            Serial.print("Frame: ");
+            Serial.print(frameCount);
+            Serial.print(", FPS: ");
+            Serial.print(frameRate, 1);
+            Serial.print(", Update time: ");
+            Serial.print(updateTime);
+            Serial.println("ms");
+          }
         } else {
           // Timeout occurred, send error
+          if (DEBUG_MODE) {
+            Serial.print("Timeout waiting for data. Expected: ");
+            Serial.print(bytesToRead);
+            Serial.print(", Received: ");
+            Serial.println(bytesRead);
+          }
           Serial.write(0xFF);
         }
+      } else if (DEBUG_MODE) {
+        Serial.print("Invalid LED count: ");
+        Serial.println(numToUpdate);
+        Serial.write(0xFF);
       }
+    } else if (DEBUG_MODE) {
+      Serial.println("Invalid header marker");
     }
   }
 } 
