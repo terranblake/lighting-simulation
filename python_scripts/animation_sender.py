@@ -3,7 +3,14 @@ import argparse
 import time
 import serial
 import math
+import sys
 from typing import List, Tuple, Callable
+
+# Protocol definitions
+HEADER_MARKER = 0xAA
+ACK_SUCCESS = 0x01
+ACK_ERROR = 0xFF
+DEBUG_PRINT = 0x02
 
 # Animation functions
 def rainbow_animation(num_leds: int, step: int) -> List[Tuple[int, int, int]]:
@@ -88,28 +95,52 @@ ANIMATIONS = {
 }
 
 class LEDAnimationSender:
-    def __init__(self, port: str, baud_rate: int = 115200, num_leds: int = 60):
+    def __init__(self, port: str, baud_rate: int = 115200, num_leds: int = 60, debug: bool = True):
         self.port = port
         self.baud_rate = baud_rate
         self.num_leds = num_leds
         self.serial = None
-        self.header_marker = 0xAA  # Should match Arduino code
+        self.debug = debug
     
     def connect(self) -> bool:
         """Connect to the Arduino over serial"""
         try:
-            self.serial = serial.Serial(self.port, self.baud_rate, timeout=2)
-            time.sleep(2)  # Wait for Arduino to reset
+            print(f"Connecting to {self.port} at {self.baud_rate} baud...")
+            self.serial = serial.Serial(self.port, self.baud_rate, timeout=5)
+            
+            # Flush any existing data
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+            
+            # Wait for Arduino to reset
+            print("Waiting for Arduino to reset (2 seconds)...")
+            time.sleep(2)
             
             # Wait for ready signal
             ready = False
             start_time = time.time()
-            while not ready and time.time() - start_time < 5:
-                if self.serial.in_waiting:
-                    line = self.serial.readline().decode('utf-8').strip()
-                    if line == "READY":
-                        ready = True
+            print("Waiting for READY signal from Arduino...")
             
+            while not ready and time.time() - start_time < 5:
+                if self.serial.in_waiting > 0:
+                    # Read the first byte to check if it's a debug message
+                    cmd = self.serial.read(1)
+                    if cmd and cmd[0] == DEBUG_PRINT:
+                        # This is a debug message, read and display it
+                        line = self.serial.readline().decode('utf-8', errors='ignore').strip()
+                        print(f"Arduino: {line}")
+                        if line == "READY":
+                            ready = True
+                    else:
+                        # Not a debug message, just print the byte
+                        print(f"Received unknown byte: {cmd.hex()}")
+                time.sleep(0.1)
+            
+            if ready:
+                print("Arduino is ready!")
+            else:
+                print("Timed out waiting for Arduino READY signal")
+                
             return ready
         except Exception as e:
             print(f"Error connecting to Arduino: {e}")
@@ -118,7 +149,25 @@ class LEDAnimationSender:
     def disconnect(self):
         """Close serial connection"""
         if self.serial and self.serial.is_open:
+            print("Closing serial connection...")
             self.serial.close()
+    
+    def process_incoming_data(self):
+        """Process any incoming data from the serial port"""
+        while self.serial and self.serial.in_waiting > 0:
+            cmd = self.serial.read(1)
+            if not cmd:
+                break
+                
+            if cmd[0] == DEBUG_PRINT:
+                # This is a debug message, read and display it
+                line = self.serial.readline().decode('utf-8', errors='ignore').strip()
+                print(f"Arduino: {line}")
+            else:
+                # Not a debug message, return the byte
+                return cmd[0]
+        
+        return None
     
     def send_frame(self, colors: List[Tuple[int, int, int]]) -> bool:
         """Send a frame of LED colors to the Arduino"""
@@ -126,27 +175,52 @@ class LEDAnimationSender:
             print("Serial connection not open")
             return False
         
+        # First, process any pending incoming data
+        while self.process_incoming_data() is not None:
+            pass
+        
         # Number of LEDs to update (limited to max 60)
         num_to_update = min(len(colors), self.num_leds)
         
         # Create data packet
-        data = bytearray([self.header_marker, num_to_update])
+        data = bytearray([HEADER_MARKER, num_to_update])
         
         # Add RGB values for each LED
         for r, g, b in colors[:num_to_update]:
             data.extend([r, g, b])
         
         # Send data
-        self.serial.write(data)
-        
-        # Wait for acknowledgment
-        start_time = time.time()
-        while time.time() - start_time < 1:
-            if self.serial.in_waiting > 0:
-                ack = self.serial.read(1)[0]
-                return ack == 0x01  # 0x01 = success, 0xFF = error
-        
-        return False  # Timeout waiting for acknowledgment
+        try:
+            bytes_written = self.serial.write(data)
+            self.serial.flush()
+            
+            if self.debug:
+                print(f"Sent {bytes_written} bytes: Header=0x{HEADER_MARKER:02X}, LEDs={num_to_update}")
+            
+            # Wait for acknowledgment
+            start_time = time.time()
+            while time.time() - start_time < 2:
+                response = self.process_incoming_data()
+                
+                if response is not None:
+                    if response == ACK_SUCCESS:
+                        return True
+                    elif response == ACK_ERROR:
+                        if self.debug:
+                            print("Received ERROR response from Arduino")
+                        return False
+                    else:
+                        if self.debug:
+                            print(f"Received unexpected response: 0x{response:02X}")
+                
+                time.sleep(0.01)
+            
+            if self.debug:
+                print("Timeout waiting for acknowledgment")
+            return False  # Timeout waiting for acknowledgment
+        except Exception as e:
+            print(f"Error sending frame: {e}")
+            return False
 
     def run_animation(self, animation_func: Callable, duration: int = 10, fps: int = 30):
         """Run an animation for a specified duration at the given frame rate"""
@@ -160,6 +234,9 @@ class LEDAnimationSender:
             
             print(f"Running animation for {duration} seconds at {fps} FPS")
             
+            success_count = 0
+            fail_count = 0
+            
             for step in range(frames):
                 start_time = time.time()
                 
@@ -168,7 +245,10 @@ class LEDAnimationSender:
                 
                 # Send frame to Arduino
                 success = self.send_frame(colors)
-                if not success:
+                if success:
+                    success_count += 1
+                else:
+                    fail_count += 1
                     print(f"Warning: Failed to send frame {step}")
                 
                 # Calculate sleep time to maintain frame rate
@@ -178,8 +258,10 @@ class LEDAnimationSender:
                     time.sleep(sleep_time)
                 
                 if step % fps == 0:  # Print status every second
-                    actual_fps = 1.0 / (elapsed + sleep_time)
+                    actual_fps = 1.0 / (elapsed + sleep_time) if (elapsed + sleep_time) > 0 else 0
                     print(f"Step {step}, Actual FPS: {actual_fps:.2f}")
+            
+            print(f"Animation complete. Successful frames: {success_count}, Failed frames: {fail_count}")
             
         finally:
             self.disconnect()
@@ -193,11 +275,12 @@ def main():
                         help='Animation pattern to display')
     parser.add_argument('--duration', type=int, default=10, help='Animation duration in seconds')
     parser.add_argument('--fps', type=int, default=30, help='Target frames per second')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
     
     args = parser.parse_args()
     
     # Create animation sender
-    sender = LEDAnimationSender(args.port, args.baud, args.leds)
+    sender = LEDAnimationSender(args.port, args.baud, args.leds, args.debug)
     
     # Run selected animation
     animation_func = ANIMATIONS[args.animation]
