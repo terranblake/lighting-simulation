@@ -23,8 +23,9 @@
 #define SERIAL_BUFFER_SIZE 64  // Increased from 32
 #define MAX_FRAMES_QUEUE 2     // Maximum number of frames to queue
 
-// Debug mode (set to 0 to disable verbose output for better performance)
-#define DEBUG_MODE  0
+// Debug mode (set to 1 to enable FPS reporting but optimize other debug code)
+#define DEBUG_MODE  1
+#define MINIMAL_DEBUG 1  // Set to 1 for minimal debug (only FPS reporting, no verbose messages)
 
 // Direct memory access buffer for maximum speed
 CRGB leds[NUM_LEDS];
@@ -96,10 +97,12 @@ void setup() {
   
   if (DEBUG_MODE) {
     sendDebugMessage("LED Animation Controller initialized");
-    char buffer[64];
-    sprintf(buffer, "LEDs: %d, Pin: %d, Buffer: %d bytes", 
-            NUM_LEDS, LED_PIN, SERIAL_BUFFER_SIZE);
-    sendDebugMessage(buffer);
+    if (!MINIMAL_DEBUG) {
+      char buffer[64];
+      sprintf(buffer, "LEDs: %d, Pin: %d, Buffer: %d bytes", 
+              NUM_LEDS, LED_PIN, SERIAL_BUFFER_SIZE);
+      sendDebugMessage(buffer);
+    }
   }
 }
 
@@ -116,7 +119,7 @@ void loop() {
         processFrame(numLeds);
       } else {
         // Timeout waiting for LED count
-        if (DEBUG_MODE) {
+        if (DEBUG_MODE && !MINIMAL_DEBUG) {
           sendDebugMessage("Timeout waiting for LED count");
         }
         Serial.write(ACK_ERROR);
@@ -129,7 +132,7 @@ void loop() {
         processDeltaFrame(numChangedLeds);
       } else {
         // Timeout waiting for changed LED count
-        if (DEBUG_MODE) {
+        if (DEBUG_MODE && !MINIMAL_DEBUG) {
           sendDebugMessage("Timeout waiting for changed LED count");
         }
         Serial.write(ACK_ERROR);
@@ -141,7 +144,7 @@ void loop() {
       uint8_t bufferStatus = (uint8_t)(getBufferUsage() * 255);
       Serial.write(bufferStatus);
       
-      if (DEBUG_MODE) {
+      if (DEBUG_MODE && !MINIMAL_DEBUG) {
         char buffer[32];
         sprintf(buffer, "Buffer status: %d%% full", (bufferStatus * 100) / 255);
         sendDebugMessage(buffer);
@@ -149,7 +152,7 @@ void loop() {
     }
     // Unknown command
     else {
-      if (DEBUG_MODE) {
+      if (DEBUG_MODE && !MINIMAL_DEBUG) {
         char buffer[24];
         sprintf(buffer, "Bad header: 0x%02X", header);
         sendDebugMessage(buffer);
@@ -203,7 +206,7 @@ void processFrame(uint8_t numLeds) {
   unsigned long startProcessing = millis();
   
   if (numLeds == 0 || numLeds > NUM_LEDS) {
-    if (DEBUG_MODE) {
+    if (DEBUG_MODE && !MINIMAL_DEBUG) {
       char buffer[32];
       sprintf(buffer, "Invalid LED count: %d", numLeds);
       sendDebugMessage(buffer);
@@ -217,7 +220,7 @@ void processFrame(uint8_t numLeds) {
   
   // Wait for all data to arrive with timeout
   if (!waitForData(bytesToRead, 200)) {
-    if (DEBUG_MODE) {
+    if (DEBUG_MODE && !MINIMAL_DEBUG) {
       sendDebugMessage("Timeout waiting for frame data");
     }
     flushInputBuffer(Serial.available());
@@ -272,47 +275,47 @@ void processFrame(uint8_t numLeds) {
   
   unsigned long updateTime = millis() - updateStart;
   
-  // Calculate frame rate (only if debugging is enabled)
-  if (DEBUG_MODE) {
-    unsigned long currentTime = millis();
-    if (lastFrameTime > 0) {
-      float timeDiff = currentTime - lastFrameTime;
-      if (timeDiff > 0) {
-        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
-        if (frameRate < 0 || isnan(frameRate)) {
-          frameRate = 0.0;
-        }
+  // Calculate frame rate - always track for FPS reporting
+  unsigned long currentTime = millis();
+  if (lastFrameTime > 0) {
+    float timeDiff = currentTime - lastFrameTime;
+    if (timeDiff > 0) {
+      frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
+      if (frameRate < 0 || isnan(frameRate)) {
+        frameRate = 0.0;
       }
-    } else {
-      frameRate = 0.0;
     }
-    lastFrameTime = currentTime;
-    frameCount++;
-    
-    // Track total processing time
-    totalProcessingTime += (millis() - startProcessing);
+  } else {
+    frameRate = 0.0;
   }
+  lastFrameTime = currentTime;
+  frameCount++;
+  
+  // Track total processing time
+  totalProcessingTime += (millis() - startProcessing);
   
   // Send binary acknowledgment
   Serial.write(ACK_SUCCESS);
   
-  // Print debug info every 30 frames (only if debugging is enabled)
+  // Print debug info every 30 frames
   if (DEBUG_MODE && (frameCount % 30 == 0)) {
-    char buffer[64];
+    // Always send the FPS info - this is important for the Python client
+    char fpsbuffer[20];
     int fps_int = (int)frameRate;
     int fps_dec = (int)((frameRate - fps_int) * 10);
-    
-    // Calculate average processing time
-    unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
-    
-    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
-            frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
-    sendDebugMessage(buffer);
-    
-    // Send a separate clean FPS message to make parsing easier
-    char fpsbuffer[20];
     sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
     sendDebugMessage(fpsbuffer);
+    
+    // Only send extended info if minimal debug is off
+    if (!MINIMAL_DEBUG) {
+      char buffer[64];
+      // Calculate average processing time
+      unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
+      
+      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
+              frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
+      sendDebugMessage(buffer);
+    }
   }
 }
 
@@ -332,7 +335,7 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   
   // Check if frame size is reasonable
   if (numChangedLeds > NUM_LEDS) {
-    if (DEBUG_MODE) {
+    if (DEBUG_MODE && !MINIMAL_DEBUG) {
       char buffer[48];
       sprintf(buffer, "Invalid delta frame size: %d LEDs", numChangedLeds);
       sendDebugMessage(buffer);
@@ -345,7 +348,7 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   // Wait for all the data to arrive
   if (!waitForData(bytesToRead, 200)) {
     // Timeout waiting for data
-    if (DEBUG_MODE) {
+    if (DEBUG_MODE && !MINIMAL_DEBUG) {
       sendDebugMessage("Timeout waiting for delta frame data");
     }
     flushInputBuffer(Serial.available());  // Discard partial data
@@ -393,44 +396,44 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   
   lastFrameProcessed = millis();
   
-  // Calculate frame rate (only if debugging is enabled)
-  if (DEBUG_MODE) {
-    unsigned long currentTime = millis();
-    if (lastFrameTime > 0) {
-      float timeDiff = currentTime - lastFrameTime;
-      if (timeDiff > 0) {
-        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
-        if (frameRate < 0 || isnan(frameRate)) {
-          frameRate = 0.0;
-        }
+  // Calculate frame rate - always track for FPS reporting
+  unsigned long currentTime = millis();
+  if (lastFrameTime > 0) {
+    float timeDiff = currentTime - lastFrameTime;
+    if (timeDiff > 0) {
+      frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
+      if (frameRate < 0 || isnan(frameRate)) {
+        frameRate = 0.0;
       }
-    } else {
-      frameRate = 0.0;
     }
-    lastFrameTime = currentTime;
-    frameCount++;
+  } else {
+    frameRate = 0.0;
   }
+  lastFrameTime = currentTime;
+  frameCount++;
   
   // Send binary acknowledgment
   Serial.write(allDataValid ? ACK_SUCCESS : ACK_ERROR);
   
-  // Send debug info periodically (only if debugging is enabled)
+  // Send debug info periodically
   if (DEBUG_MODE && (frameCount % 30 == 0)) {
-    char buffer[64];
+    // Always send the FPS info - this is important for the Python client
+    char fpsbuffer[20];
     int fps_int = (int)frameRate;
     int fps_dec = (int)((frameRate - fps_int) * 10);
-    
-    // Calculate average processing time
-    unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
-    
-    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Dropped: %lu, AvgProc: %lums", 
-            frameCount, fps_int, fps_dec, droppedFrames, avgProcessTime);
-    sendDebugMessage(buffer);
-    
-    // Send a separate clean FPS message to make parsing easier
-    char fpsbuffer[20];
     sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
     sendDebugMessage(fpsbuffer);
+    
+    // Only send extended info if minimal debug is off
+    if (!MINIMAL_DEBUG) {
+      char buffer[64];
+      // Calculate average processing time
+      unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
+      
+      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Dropped: %lu, AvgProc: %lums", 
+              frameCount, fps_int, fps_dec, droppedFrames, avgProcessTime);
+      sendDebugMessage(buffer);
+    }
   }
 }
 
@@ -446,7 +449,7 @@ void sendBufferStatus() {
   uint8_t bufferStatus = getBufferUsage() * 255;
   Serial.write(bufferStatus);
   
-  if (DEBUG_MODE) {
+  if (DEBUG_MODE && !MINIMAL_DEBUG) {
     char buffer[64];
     sprintf(buffer, "Buffer status: %d%% full", (bufferStatus * 100) / 255);
     sendDebugMessage(buffer);
