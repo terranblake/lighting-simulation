@@ -26,6 +26,7 @@ class SerialManager:
         self.last_buffer_check = 0
         self.buffer_fullness = 0.0  # 0.0 to 1.0
         self.dropped_frames = 0
+        self.arduino_fps = 0.0  # FPS reported by Arduino
         
         # Dynamic FPS control parameters
         self.ack_times = []  # Track recent acknowledgment times
@@ -140,6 +141,16 @@ class SerialManager:
             if message_type == b'\x02':  # DEBUG_PRINT marker
                 message = self.serial_connection.readline().decode('utf-8', errors='ignore').strip()
                 self.debug_messages.append(message)
+                
+                # Parse FPS information from debug messages
+                if 'FPS:' in message:
+                    try:
+                        # Extract FPS value - typical format: "Frame: 123, FPS: 45.6, ..."
+                        fps_part = message.split('FPS:')[1].split(',')[0].strip()
+                        self.arduino_fps = float(fps_part)
+                    except (ValueError, IndexError):
+                        pass  # Failed to parse FPS, ignore
+                
                 if self.debug_mode:
                     logging.debug(f"Arduino: {message}")
                     

@@ -300,15 +300,18 @@ def run_visualization():
                 
                 buffer_fullness = 0
                 target_fps = 0
+                arduino_fps = 0
                 if arduino:
                     buffer_fullness = arduino.buffer_fullness
                     target_fps = arduino.target_fps
+                    arduino_fps = arduino.arduino_fps
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
                     'beat': 1 if beat_detected else 0,
                     'fps': round(fps, 1),
                     'target_fps': round(target_fps, 1),
+                    'arduino_fps': round(arduino_fps, 1),
                     'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
