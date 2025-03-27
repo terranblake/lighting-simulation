@@ -307,6 +307,10 @@ def run_visualization():
                     arduino_fps = arduino.arduino_fps
                     logger.debug(f"Arduino metrics - Buffer: {buffer_fullness*100:.1f}%, Target FPS: {target_fps}, Arduino FPS: {arduino_fps}")
                 
+                # Log every 30 frames to avoid excessive logging
+                if frame_count % 30 == 0:
+                    logger.info(f"Sending visualization data - Current FPS: {fps:.1f}, Arduino FPS: {arduino_fps:.1f}, Target: {target_fps:.1f}")
+                
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
                     'beat': 1 if beat_detected else 0,
