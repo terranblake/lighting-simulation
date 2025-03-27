@@ -5,9 +5,9 @@
 The following optimizations were implemented to increase the frame rate from ~42 FPS to a target of 80+ FPS:
 
 1. **Serial Communication**
-   - Increased baud rate from 74880 to 230400 for faster data transfer
+   - Increased baud rate from 74880 to 460800 for significantly faster data transfer
    - Implemented optimized bulk reading of serial data with `readSerialData()` function
-   - Increased serial buffer size from 32 to 64 bytes
+   - Increased serial buffer size from 32 to 128 bytes
 
 2. **Color Smoothing**
    - Made color smoothing optional with `ENABLE_SMOOTHING` define (set to 0 by default)

@@ -9,7 +9,7 @@ import collections
 class SerialManager:
     """Manages serial communication with the Arduino controlling the LED strip."""
     
-    def __init__(self, port=None, baud_rate=230400, num_leds=60, mock_mode=False, debug_mode=False, max_fps=30):
+    def __init__(self, port=None, baud_rate=460800, num_leds=60, mock_mode=False, debug_mode=False, max_fps=60, read_timeout=1.0, write_timeout=1.0):
         self.port = port
         self.baud_rate = baud_rate
         self.num_leds = num_leds
