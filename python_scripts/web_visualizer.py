@@ -209,9 +209,40 @@ def run_visualization():
     """Run the visualization loop"""
     last_update_time = time.time()
     frame_count = 0
+    audio_processing_queue = []
+    max_queue_size = 3  # Maximum number of frames to queue
+    
+    # Create an event and a lock for thread synchronization
+    audio_processing_done = threading.Event()
+    queue_lock = threading.Lock()
+    
+    def process_audio_frame(audio_data, event):
+        """Process audio data in a separate thread"""
+        # Skip if no audio data
+        if audio_data is None or len(audio_data) == 0:
+            event.set()
+            return None
+        
+        # Compute FFT and other audio features
+        fft_data = audio_analyzer.compute_fft(audio_data)
+        beat_detected = audio_analyzer.detect_beat(audio_data)
+        frequency_bands = audio_analyzer.get_frequency_bands(fft_data)
+        
+        result = {
+            'fft_data': fft_data,
+            'beat_detected': beat_detected,
+            'frequency_bands': frequency_bands,
+            'audio_data': audio_data
+        }
+        
+        # Signal that processing is done
+        event.set()
+        return result
     
     try:
         logger.info("Starting visualization loop")
+        
+        # Main visualization loop
         while not stop_event.is_set():
             # Get audio data
             audio_data = audio_capture.get_audio_data()
@@ -219,47 +250,66 @@ def run_visualization():
             if audio_data is None or len(audio_data) == 0:
                 time.sleep(0.01)
                 continue
-                
-            # Analyze audio
-            fft_data = audio_analyzer.compute_fft(audio_data)
-            beat_detected = audio_analyzer.detect_beat(audio_data)
-            frequency_bands = audio_analyzer.get_frequency_bands(fft_data)
             
-            # Update visualizer
-            led_visualizer.update(
-                audio_data=audio_data,
-                fft_data=fft_data,
-                beat_detected=beat_detected,
-                frequency_bands=frequency_bands
-            )
-            
-            # Get LED colors - ensure they're in the right format
-            led_colors = led_visualizer.get_led_colors()
-            
-            # Verify format: must be a list of (r,g,b) tuples
-            if led_colors and not isinstance(led_colors[0], tuple):
-                # Convert if they're not already tuples
-                # This ensures compatibility with both old and new visualizers
-                rgb_colors = []
-                for i in range(0, len(led_colors), 3):
-                    if i+2 < len(led_colors):
-                        rgb_colors.append((led_colors[i], led_colors[i+1], led_colors[i+2]))
-                led_colors = rgb_colors
-            
-            # Send to Arduino
-            if arduino and arduino.is_connected():
-                try:
-                    # Debug - log a sample of the color values
-                    if frame_count % 30 == 0:
-                        sample_colors = led_colors[:3] if led_colors else []
-                        logger.info(f"Sample LED colors: {sample_colors}")
+            # Process audio data in a background thread if queue isn't full
+            with queue_lock:
+                if len(audio_processing_queue) < max_queue_size:
+                    # Reset event
+                    audio_processing_done.clear()
                     
-                    arduino.send_data(led_colors)
-                except Exception as e:
-                    logger.error(f"Error sending data to Arduino: {str(e)}")
+                    # Start processing in background
+                    audio_thread = threading.Thread(
+                        target=lambda: audio_processing_queue.append(
+                            process_audio_frame(audio_data, audio_processing_done)
+                        )
+                    )
+                    audio_thread.daemon = True
+                    audio_thread.start()
             
-            # Send data to client for preview
-            frame_count += 1
+            # Use processed data if available
+            processed_data = None
+            with queue_lock:
+                if audio_processing_queue:
+                    processed_data = audio_processing_queue.pop(0)
+            
+            if processed_data:
+                # Update visualizer with processed data
+                led_visualizer.update(
+                    audio_data=processed_data['audio_data'],
+                    fft_data=processed_data['fft_data'],
+                    beat_detected=processed_data['beat_detected'],
+                    frequency_bands=processed_data['frequency_bands']
+                )
+                
+                # Get LED colors - ensure they're in the right format
+                led_colors = led_visualizer.get_led_colors()
+                
+                # Verify format: must be a list of (r,g,b) tuples
+                if led_colors and not isinstance(led_colors[0], tuple):
+                    # Convert if they're not already tuples
+                    # This ensures compatibility with both old and new visualizers
+                    rgb_colors = []
+                    for i in range(0, len(led_colors), 3):
+                        if i+2 < len(led_colors):
+                            rgb_colors.append((led_colors[i], led_colors[i+1], led_colors[i+2]))
+                    led_colors = rgb_colors
+                
+                # Send to Arduino
+                if arduino and arduino.is_connected():
+                    try:
+                        # Debug - log a sample of the color values
+                        if frame_count % 30 == 0:
+                            sample_colors = led_colors[:3] if led_colors else []
+                            logger.info(f"Sample LED colors: {sample_colors}")
+                        
+                        arduino.send_data(led_colors)
+                    except Exception as e:
+                        logger.error(f"Error sending data to Arduino: {str(e)}")
+                
+                # Count frame
+                frame_count += 1
+            
+            # Send data to client for preview periodically
             now = time.time()
             if now - last_update_time >= 0.1:  # Update client at 10 Hz
                 fps = frame_count / (now - last_update_time)
@@ -282,20 +332,22 @@ def run_visualization():
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
-                    'beat': beat_detected,
+                    'beat': processed_data['beat_detected'] if processed_data else False,
                     'fps': round(fps, 1),
                     'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
                 frame_count = 0
-                
-            # Prevent CPU overload
-            time.sleep(0.01)
             
+            # Adaptive CPU load management
+            # If we're processing frames very quickly, sleep a tiny bit to avoid 100% CPU
+            if not stop_event.is_set():
+                time.sleep(0.001)  # 1ms sleep to allow other threads to run
+                
     except Exception as e:
-        logger.exception(f"Error in visualization thread: {e}")
-        socketio.emit('error', {'message': f'Visualization error: {str(e)}'})
-        stop_visualization()
+        logger.exception(f"Error in visualization loop: {e}")
+    finally:
+        logger.info("Visualization loop stopped")
 
 def main():
     """Run the web visualizer server"""

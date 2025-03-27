@@ -196,27 +196,28 @@ class SerialManager:
         
         with self.lock:
             try:
+                # Prepare the data in memory first - more efficient than writing byte by byte
                 # Send header: 0xAA followed by number of LEDs
-                self.serial_connection.write(struct.pack('BB', 0xAA, len(led_colors)))
+                data = bytearray([0xAA, len(led_colors)])
                 
-                # Send RGB values for each LED
+                # Add RGB values for each LED to the buffer
                 for r, g, b in led_colors:
-                    self.serial_connection.write(struct.pack('BBB', r, g, b))
-                    
+                    data.extend([r, g, b])
+                
+                # Send the entire frame in one write operation
+                self.serial_connection.write(data)
                 self.serial_connection.flush()
                 
-                # Wait for acknowledgment with timeout
+                # Process any incoming acknowledgments with timeout
                 start_time = time.time()
-                got_response = False
                 
                 while time.time() - start_time < 0.1:  # 100ms timeout
                     self.process_incoming_data()
                     
-                    # If we've processed incoming data including an ACK, break
-                    if self.serial_connection.in_waiting == 0:
-                        got_response = True
+                    # If we've processed all pending data, we're done
+                    if not self.serial_connection.in_waiting:
                         break
-                        
+                    
                     time.sleep(0.001)  # Small sleep to avoid busy waiting
                 
                 self.frame_count += 1

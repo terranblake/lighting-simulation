@@ -217,148 +217,107 @@ class AudioCapture:
 
 
 class AudioAnalyzer:
-    """Analyzes audio data to extract features for visualization"""
-    
-    def __init__(self, sample_rate: int = SAMPLE_RATE, buffer_size: int = BUFFER_SIZE):
-        """
-        Initialize audio analyzer.
-        
-        Args:
-            sample_rate: Audio sample rate in Hz
-            buffer_size: Number of audio frames to analyze at once
-        """
+    """
+    Class to analyze audio data, compute FFT and beat detection
+    """
+    def __init__(self, sample_rate=44100, fft_size=1024):
         self.sample_rate = sample_rate
-        self.buffer_size = buffer_size
+        self.fft_size = fft_size
+        self.window = np.hanning(fft_size)
+        self.energy_history = []
+        self.max_history_size = 43  # ~1 second at 44.1kHz with hop of 1024
+        self.beat_threshold = 1.5   # Energy must be this many times the average to be a beat
+        self.smoothing = 0.85       # Smoothing factor for energy history
         
-        # FFT variables
-        self.fft_size = buffer_size
-        self.freq_bins = np.fft.rfftfreq(self.fft_size, 1.0/self.sample_rate)
+        # Precompute frequency bins for efficiency
+        self.frequencies = np.fft.rfftfreq(fft_size, 1.0/sample_rate)
+        self.frequency_bands_indices = []
         
-        # Beat detection parameters
-        self.energy_history = deque(maxlen=50)  # Store energy history for 50 frames
-        self.beat_threshold = 1.5   # How much energy increase for a beat
-        self.is_beat = False
-        self.beat_counted = False
-        self.last_beat_time = 0
-        self.beat_interval = 0.5    # Minimum time between beats (seconds)
+        # Define frequency band ranges (in Hz)
+        self.band_ranges = [
+            (20, 60),     # Sub bass
+            (60, 250),    # Bass
+            (250, 500),   # Low midrange
+            (500, 2000),  # Midrange
+            (2000, 4000), # Upper midrange
+            (4000, 6000), # Presence
+            (6000, 20000) # Brilliance
+        ]
+        
+        # Precompute frequency band indices
+        for low, high in self.band_ranges:
+            indices = np.where((self.frequencies >= low) & (self.frequencies <= high))[0]
+            self.frequency_bands_indices.append(indices)
     
-    def compute_fft(self, audio_data: np.ndarray) -> np.ndarray:
+    def compute_fft(self, audio_data):
         """
-        Compute FFT on audio data
-        
-        Args:
-            audio_data: Audio data to analyze (n_samples, n_channels)
-            
-        Returns:
-            np.ndarray: Frequency magnitudes
+        Compute the FFT of the given audio data
+        Returns magnitude spectrum
         """
-        # Convert to mono if stereo by averaging channels
-        if audio_data.ndim > 1 and audio_data.shape[1] > 1:
-            audio_mono = np.mean(audio_data, axis=1)
-        else:
-            audio_mono = audio_data.flatten()
+        # Ensure audio data is the right shape
+        if len(audio_data) < self.fft_size:
+            # Pad with zeros if needed
+            audio_data = np.pad(audio_data, (0, self.fft_size - len(audio_data)))
+        elif len(audio_data) > self.fft_size:
+            # Truncate if needed
+            audio_data = audio_data[:self.fft_size]
         
-        # Apply window function to reduce spectral leakage
-        window = np.hanning(len(audio_mono))
-        windowed_data = audio_mono * window
+        # Apply window to reduce spectral leakage
+        windowed_data = audio_data * self.window
         
-        # Compute FFT
-        fft_data = np.abs(np.fft.rfft(windowed_data))
+        # Compute FFT - use rfft for real-valued signals (faster)
+        fft = np.fft.rfft(windowed_data)
         
-        # Convert to dB scale (logarithmic amplitude)
-        fft_data = 20 * np.log10(fft_data + 1e-10)
+        # Get magnitude spectrum (absolute value of complex FFT)
+        # Note: computing magnitude once is more efficient
+        magnitude = np.abs(fft) / (self.fft_size / 2)
         
-        return fft_data
+        return magnitude
     
-    def detect_beat(self, audio_data: np.ndarray) -> bool:
+    def get_frequency_bands(self, fft_data):
         """
-        Simple beat detection algorithm
-        
-        Args:
-            audio_data: Audio data to analyze
-            
-        Returns:
-            bool: True if a beat is detected
+        Divide the FFT data into frequency bands
+        Returns list of energies for each band
         """
-        # Check for empty audio data
-        if audio_data is None or len(audio_data) == 0:
-            return False
-            
-        # Convert to mono and compute energy
-        if audio_data.ndim > 1 and audio_data.shape[1] > 1:
-            audio_mono = np.mean(audio_data, axis=1)
-        else:
-            audio_mono = audio_data.flatten()
+        # Use precomputed indices for faster band calculation
+        bands = [np.mean(fft_data[indices]) if len(indices) > 0 else 0 
+                 for indices in self.frequency_bands_indices]
         
-        # Compute RMS energy
-        energy = np.sqrt(np.mean(audio_mono ** 2))
+        # Apply some scaling for visualization
+        bands = np.array(bands) * 2.0
+        
+        return bands
+    
+    def detect_beat(self, audio_data):
+        """
+        Detect beats in the audio data using energy-based approach
+        Returns True if beat was detected, False otherwise
+        """
+        # Calculate RMS energy of the frame
+        if audio_data.ndim > 1:
+            audio_data = np.mean(audio_data, axis=1)  # Convert stereo to mono
+            
+        # Use vectorized energy calculation (faster than loop)
+        energy = np.sqrt(np.mean(audio_data ** 2))
         
         # Add to history
         self.energy_history.append(energy)
         
-        # Wait until we have enough history
-        if len(self.energy_history) < 20:
+        # Trim history if needed
+        if len(self.energy_history) > self.max_history_size:
+            self.energy_history = self.energy_history[-self.max_history_size:]
+        
+        # Need some history to detect beats
+        if len(self.energy_history) < 2:
             return False
         
-        # Get average of recent energies
-        recent_energies = list(self.energy_history)[-20:-1]
-        if not recent_energies:  # Safeguard against empty list
-            return False
-            
-        avg_energy = np.mean(recent_energies)
+        # Calculate the average energy over history
+        avg_energy = np.mean(self.energy_history)
         
-        # Check if current energy is significantly higher than average
-        is_beat_by_energy = energy > avg_energy * self.beat_threshold
+        # Beat is detected if current energy is significantly above average
+        is_beat = energy > avg_energy * self.beat_threshold and energy > 0.01
         
-        # Enforce minimum time between beats
-        current_time = time.time()
-        enough_time_passed = current_time - self.last_beat_time > self.beat_interval
-        
-        # Detect beat
-        if is_beat_by_energy and enough_time_passed:
-            self.last_beat_time = current_time
-            self.is_beat = True
-            return True
-        else:
-            self.is_beat = False
-            return False
-
-    def get_frequency_bands(self, fft_data: np.ndarray, num_bands: int = 16) -> np.ndarray:
-        """
-        Divide FFT data into frequency bands
-        
-        Args:
-            fft_data: FFT data
-            num_bands: Number of frequency bands to create
-            
-        Returns:
-            np.ndarray: Energy in each frequency band
-        """
-        # Get number of FFT bins
-        n_bins = len(fft_data)
-        
-        # Create logarithmically spaced bands (more resolution in lower frequencies)
-        bands = np.logspace(0, np.log10(max(1, n_bins)), num_bands + 1).astype(int)
-        
-        # Ensure bands are within range
-        bands = np.clip(bands, 0, n_bins - 1)
-        
-        # Calculate energy in each band
-        band_energies = np.zeros(num_bands)
-        for i in range(num_bands):
-            start = bands[i]
-            end = bands[i + 1]
-            if start >= end:  # Ensure valid slice
-                band_energies[i] = 0
-            else:
-                # Use np.nanmean to handle NaN values
-                slice_data = fft_data[start:end]
-                if len(slice_data) > 0:
-                    band_energies[i] = np.mean(slice_data)
-                else:
-                    band_energies[i] = 0
-        
-        return band_energies
+        return is_beat
 
 
 def list_audio_devices():
@@ -401,7 +360,7 @@ if __name__ == "__main__":
                 fft_data = analyzer.compute_fft(audio_data)
                 
                 # Get frequency bands
-                bands = analyzer.get_frequency_bands(fft_data, num_bands=8)
+                bands = analyzer.get_frequency_bands(fft_data)
                 
                 # Print status
                 if is_beat:
