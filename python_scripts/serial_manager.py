@@ -58,8 +58,8 @@ class SerialManager:
         # Differential encoding
         self.previous_colors = [(0, 0, 0)] * num_leds
         self.use_differential = True
-        self.full_refresh_interval = 30  # Send full frame every N frames
-        self.change_threshold = 3      # Minimum RGB difference to consider a change
+        self.full_refresh_interval = 1  # Send full frame every N frames
+        self.change_threshold = 1      # Minimum RGB difference to consider a change
         
     def connect(self, port=None):
         """Connect to the Arduino via the specified serial port."""
