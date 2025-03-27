@@ -101,7 +101,7 @@ def handle_start_visualization(data):
         device_name = data.get('device_name', 'Default Device')
         visualization_type = data.get('visualization_type', 'spectrum')
         arduino_port = data.get('arduino_port', '/dev/tty.usbserial-110')
-        max_fps = int(data.get('max_fps', 60))  # Allow client to specify max FPS
+        max_fps = 120
         
         logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}")
         
@@ -176,9 +176,10 @@ def handle_update_fps_limit(data):
         return
     
     try:
-        max_fps = int(data.get('max_fps', 60))
+        max_fps = 120
         arduino.max_fps = max_fps
-        arduino.target_fps = min(arduino.target_fps, max_fps)
+        # arduino.target_fps = min(arduino.target_fps, max_fps)
+        arduino.target_fps = 120
         arduino.min_frame_time = 1.0 / arduino.target_fps if arduino.target_fps > 0 else 0
         
         logger.info(f"Updated max FPS limit to {max_fps}")
@@ -232,6 +233,12 @@ def run_visualization():
     last_update_time = time.time()
     frame_count = 0
     
+    # Statistics for tracking performance
+    frames_sent_to_arduino = 0  # Track frames we send to Arduino
+    last_sent_stats_time = time.time()
+    sent_frame_count = 0
+    sent_fps = 0
+    
     try:
         logger.info("Starting visualization loop")
         while not stop_event.is_set():
@@ -277,8 +284,19 @@ def run_visualization():
                         logger.info(f"Sample LED colors: {sample_colors}")
                     
                     arduino.send_data(led_colors)
+                    # Update sent frames count
+                    frames_sent_to_arduino += 1
+                    sent_frame_count += 1
                 except Exception as e:
                     logger.error(f"Error sending data to Arduino: {str(e)}")
+            
+            # Calculate sent frames FPS
+            now = time.time()
+            if now - last_sent_stats_time >= 1.0:  # Update stats every second
+                sent_fps = sent_frame_count / (now - last_sent_stats_time)
+                last_sent_stats_time = now
+                sent_frame_count = 0
+                logger.info(f"Frames sent to Arduino: {frames_sent_to_arduino}, Current send rate: {sent_fps:.1f} FPS")
             
             # Send data to client for preview
             frame_count += 1
@@ -317,6 +335,7 @@ def run_visualization():
                     'fps': round(fps, 1),
                     'target_fps': round(target_fps, 1),
                     'arduino_fps': round(arduino_fps, 1),
+                    'sent_fps': round(sent_fps, 1),
                     'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
@@ -340,8 +359,8 @@ def main():
                         help='Port to run the server on')
     parser.add_argument('--list-devices', action='store_true',
                         help='List available audio devices and exit')
-    parser.add_argument('--max-fps', type=int, default=60,
-                        help='Maximum frames per second to send to Arduino (default: 60)')
+    parser.add_argument('--max-fps', type=int, default=120,
+                        help='Maximum frames per second to send to Arduino (default: 120)')
     
     args = parser.parse_args()
     

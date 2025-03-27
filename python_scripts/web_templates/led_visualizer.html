@@ -248,6 +248,7 @@
                     <span id="fps" class="metric">0 FPS</span>
                     <span id="target-fps" class="metric">Target: 0</span>
                     <span id="arduino-fps" class="metric metric-highlight">Arduino: 0</span>
+                    <span id="sent-fps" class="metric">Sent: 0</span>
                     <span id="buffer" class="metric">Buffer: 0%</span>
                 </div>
             </div>
@@ -322,6 +323,7 @@
                 fpsText.textContent = '0 FPS';
                 document.getElementById('target-fps').textContent = 'Target: 0';
                 document.getElementById('arduino-fps').textContent = 'Arduino: 0';
+                document.getElementById('sent-fps').textContent = 'Sent: 0';
                 document.getElementById('buffer').textContent = 'Buffer: 0%';
                 clearLEDs();
             });
@@ -338,6 +340,7 @@
                 // Update metrics
                 fpsText.textContent = `${data.fps} FPS`;
                 document.getElementById('target-fps').textContent = `Target: ${data.target_fps}`;
+                document.getElementById('sent-fps').textContent = `Sent: ${data.sent_fps}`;
                 
                 // Highlight Arduino FPS when it changes from 0
                 const arduinoFpsElement = document.getElementById('arduino-fps');
