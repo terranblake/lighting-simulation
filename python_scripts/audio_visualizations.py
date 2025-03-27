@@ -80,7 +80,7 @@ class BaseVisualizer:
         factor = max(0.0, min(1.0, blend_factor))
         return (
             int(r1 * (1 - factor) + r2 * factor),
-            int(g1 * (1 - factor) + r2 * factor),
+            int(g1 * (1 - factor) + g2 * factor),
             int(b1 * (1 - factor) + b2 * factor)
         )
     
@@ -828,81 +828,61 @@ class VUMeterVisualizer(BaseVisualizer):
 
 
 class CenterGradientVisualizer(BaseVisualizer):
-    """Visualizer that creates an expanding color pattern from center based on music energy"""
+    """Visualizer that creates an expanding white pattern from center based on audio amplitude"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
-        # Current base color (hue)
-        self.current_hue = 0.0
-        # Fixed color mode
-        self.use_fixed_color = False
-        self.fixed_color_hue = 0.0  # 0.0-1.0 range for HSV
-        # Color rotation speed
-        self.hue_shift_speed = 0.01
-        # Color change on beat
-        self.beat_hue_jump = 0.1
-        # Energy trackers for different frequency ranges
-        self.bass_energy = 0.0
-        self.mid_energy = 0.0
-        self.high_energy = 0.0
+        # Energy trackers for audio amplitude
+        self.audio_energy = 0.0
         # Decay rates for smoothing
         self.energy_decay = 0.8
         # Previous frame energy for smoothing
         self.prev_energy = 0.0
         # Smoothing factor for changes between frames (0-1)
         self.transition_smoothing = 0.7
-        # Color spread rate - how much hue changes as it expands outward
-        self.color_spread_rate = 0.3
         # Minimum expansion (always shows a small central dot even with no audio)
         self.min_expansion = 0.05
     
     def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
-        """Update visualization with expanding colors from center based on audio energy"""
+        """Update visualization with expanding white pattern based on audio amplitude"""
         # Get parameters
         brightness = self.brightness
         sensitivity = self.sensitivity
         
-        # Extract and update frequency band energies if available
-        if frequency_bands is not None and len(frequency_bands) >= 7:
-            # Use first bands for bass
-            current_bass = np.mean(frequency_bands[:2]) * sensitivity
-            
-            # Use middle bands for mids
-            current_mid = np.mean(frequency_bands[2:5]) * sensitivity
-            
-            # Use highest bands for highs
-            current_high = np.mean(frequency_bands[5:]) * sensitivity
-            
-            # Update running averages with decay
-            self.bass_energy = max(current_bass, self.bass_energy * self.energy_decay)
-            self.mid_energy = max(current_mid, self.mid_energy * self.energy_decay)
-            self.high_energy = max(current_high, self.high_energy * self.energy_decay)
-        else:
-            # Decay if no data
-            self.bass_energy *= self.energy_decay
-            self.mid_energy *= self.energy_decay
-            self.high_energy *= self.energy_decay
+        # Calculate current audio energy from different sources
+        current_energy = 0.0
         
-        # Update base color - but only if not using fixed color
-        if not self.use_fixed_color:
-            if beat_detected:
-                # Jump to a new color on beat
-                self.current_hue = (self.current_hue + self.beat_hue_jump) % 1.0
+        if audio_data is not None and len(audio_data) > 0:
+            # Calculate RMS (root mean square) of audio data
+            audio_data = np.array(audio_data)
+            if audio_data.ndim > 1:  # If stereo, convert to mono
+                audio_data = np.mean(audio_data, axis=1)
+            rms = np.sqrt(np.mean(np.square(audio_data)))
+            current_energy = rms * 3.0 * sensitivity  # Scale up since RMS values are typically small
+        elif frequency_bands is not None and len(frequency_bands) > 0:
+            # Use overall energy from frequency bands
+            # Weight bass a bit more heavily
+            bass_weight = 1.5
+            mid_weight = 1.0
+            high_weight = 0.7
+            
+            # Calculate weighted average based on frequency bands
+            if len(frequency_bands) >= 7:
+                bass = np.mean(frequency_bands[:2]) * bass_weight
+                mid = np.mean(frequency_bands[2:5]) * mid_weight
+                high = np.mean(frequency_bands[5:]) * high_weight
+                current_energy = (bass + mid + high) / (bass_weight + mid_weight + high_weight)
             else:
-                # Gradually shift hue based on bass energy
-                hue_shift = self.hue_shift_speed * (1.0 + self.bass_energy * 2)
-                self.current_hue = (self.current_hue + hue_shift) % 1.0
-        else:
-            # Use the fixed color
-            self.current_hue = self.fixed_color_hue
+                current_energy = np.mean(frequency_bands)
+            
+            current_energy *= sensitivity
         
-        # Calculate total energy for expansion
-        # Weight bass more heavily for expansion effect
-        total_energy = (self.bass_energy * 1.2) + (self.mid_energy * 0.8) + (self.high_energy * 0.6)
+        # Update running average with decay
+        self.audio_energy = max(current_energy, self.audio_energy * self.energy_decay)
         
         # Apply smoothing to energy changes
         smoothed_energy = (self.prev_energy * self.transition_smoothing + 
-                         total_energy * (1 - self.transition_smoothing))
+                         self.audio_energy * (1 - self.transition_smoothing))
         self.prev_energy = smoothed_energy
         
         # Calculate expansion factor (0.0-1.0)
@@ -928,27 +908,20 @@ class CenterGradientVisualizer(BaseVisualizer):
                 self.led_colors[i] = (0, 0, 0)  # Black
             else:
                 # Calculate relative position within the expanded area (0.0-1.0)
-                # This creates a gradient from center to expansion threshold
+                # This creates a gradient from center to edge of the expanded area
                 relative_pos = distance_from_center / max(1, expansion_threshold)
                 
-                # Calculate color shift based on distance from center
-                # This makes the color change as it expands outward
-                hue_shift = (relative_pos * self.color_spread_rate) % 1.0
-                current_hue = (self.current_hue + hue_shift) % 1.0
+                # Calculate brightness based on position (center is brighter, edges are darker)
+                # and overall audio amplitude
+                center_brightness = min(1.0, smoothed_energy * 1.2)  # Boost center brightness a bit
+                edge_brightness = center_brightness * (1.0 - relative_pos)  # Fade to edges
                 
-                # Calculate saturation and value
-                # Full saturation at center, decreasing toward edges
-                saturation = 1.0 - (relative_pos * 0.3)
+                # Apply global brightness
+                value = min(1.0, edge_brightness * brightness)
                 
-                # Brightness peaks at mid-distance, lower at center and edges
-                # This creates a ring-like effect
-                # Adjust curve_factor to change the visual effect
-                curve_factor = 4.0
-                value_curve = 1.0 - pow(relative_pos * 2.0 - 1.0, 2) * curve_factor
-                value = min(1.0, max(0.3, value_curve) * brightness)
-                
-                # Set the LED color
-                self.led_colors[i] = self._hsv_to_rgb(current_hue, saturation, value)
+                # Set white color with calculated brightness
+                white_value = int(255 * value)
+                self.led_colors[i] = (white_value, white_value, white_value)
         
         return self.get_colors()
     
@@ -956,36 +929,10 @@ class CenterGradientVisualizer(BaseVisualizer):
         """Set visualizer parameters"""
         super().set_param(param, value)
         
-        if param == "hue_shift_speed":
-            try:
-                value = float(value)
-                self.hue_shift_speed = max(0.001, min(0.05, value))
-            except ValueError:
-                pass
-        elif param == "beat_hue_jump":
-            try:
-                value = float(value)
-                self.beat_hue_jump = max(0.05, min(0.3, value))
-            except ValueError:
-                pass
-        elif param == "transition_smoothing":
+        if param == "transition_smoothing":
             try:
                 value = float(value)
                 self.transition_smoothing = max(0.0, min(0.9, value))
-            except ValueError:
-                pass
-        elif param == "use_fixed_color":
-            self.use_fixed_color = bool(value)
-        elif param == "fixed_color_hue":
-            try:
-                value = float(value)
-                self.fixed_color_hue = max(0.0, min(1.0, value))
-            except ValueError:
-                pass
-        elif param == "color_spread_rate":
-            try:
-                value = float(value)
-                self.color_spread_rate = max(0.0, min(1.0, value))
             except ValueError:
                 pass
         elif param == "min_expansion":
@@ -994,40 +941,12 @@ class CenterGradientVisualizer(BaseVisualizer):
                 self.min_expansion = max(0.0, min(0.5, value))
             except ValueError:
                 pass
-        elif param == "color":
-            # Allow setting a color by name or RGB
-            if value in {"red", "green", "blue", "yellow", "purple", "cyan", "white"}:
-                # Map color names to hue values
-                color_map = {
-                    "red": 0.0,
-                    "yellow": 0.16,
-                    "green": 0.33,
-                    "cyan": 0.5,
-                    "blue": 0.66,
-                    "purple": 0.83,
-                    "white": 0.0  # Special case, will set saturation to 0 in update
-                }
-                self.fixed_color_hue = color_map[value]
-                self.use_fixed_color = True
-            elif isinstance(value, tuple) and len(value) == 3:
-                # Convert RGB to HSV, extract hue
-                r, g, b = value
-                r, g, b = r / 255.0, g / 255.0, b / 255.0
-                max_val = max(r, g, b)
-                min_val = min(r, g, b)
-                
-                if max_val == min_val:
-                    h = 0  # Grayscale
-                elif max_val == r:
-                    h = ((g - b) / (max_val - min_val)) % 6
-                elif max_val == g:
-                    h = ((b - r) / (max_val - min_val)) + 2
-                else:
-                    h = ((r - g) / (max_val - min_val)) + 4
-                
-                h = h / 6.0  # Convert to 0-1 range
-                self.fixed_color_hue = h
-                self.use_fixed_color = True
+        elif param == "energy_decay":
+            try:
+                value = float(value)
+                self.energy_decay = max(0.5, min(0.95, value))
+            except ValueError:
+                pass
 
 
 # Register available visualizations
