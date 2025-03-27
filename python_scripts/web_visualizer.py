@@ -12,7 +12,7 @@ import logging
 import numpy as np
 from flask import Flask, render_template, send_from_directory, jsonify, request
 from flask_socketio import SocketIO, emit
-from serial_manager import ArduinoManager
+from serial_manager import SerialManager
 
 try:
     from python_scripts.audio_visualizer import AudioCapture, AudioAnalyzer
@@ -111,7 +111,7 @@ def handle_start_visualization(data):
             arduino = None
         else:
             # Initialize Arduino connection
-            arduino = ArduinoManager(port=arduino_port)
+            arduino = SerialManager(port=arduino_port)
             arduino_connected = arduino.connect()
             
             if not arduino_connected:
@@ -187,7 +187,7 @@ def stop_visualization():
         if arduino:
             # Turn off all LEDs
             try:
-                arduino.send_data([0, 0, 0] * 60)
+                arduino.clear_leds()
                 arduino.disconnect()
             except Exception as e:
                 logger.error(f"Error while stopping Arduino: {e}")
@@ -233,22 +233,58 @@ def run_visualization():
                 frequency_bands=frequency_bands
             )
             
-            # Get LED colors
+            # Get LED colors - ensure they're in the right format
             led_colors = led_visualizer.get_led_colors()
             
+            # Verify format: must be a list of (r,g,b) tuples
+            if led_colors and not isinstance(led_colors[0], tuple):
+                # Convert if they're not already tuples
+                # This ensures compatibility with both old and new visualizers
+                rgb_colors = []
+                for i in range(0, len(led_colors), 3):
+                    if i+2 < len(led_colors):
+                        rgb_colors.append((led_colors[i], led_colors[i+1], led_colors[i+2]))
+                led_colors = rgb_colors
+            
             # Send to Arduino
-            if arduino and arduino.is_connected:
-                arduino.send_data(led_colors)
+            if arduino and arduino.is_connected():
+                try:
+                    # Debug - log a sample of the color values
+                    if frame_count % 30 == 0:
+                        sample_colors = led_colors[:3] if led_colors else []
+                        logger.info(f"Sample LED colors: {sample_colors}")
+                    
+                    arduino.send_data(led_colors)
+                except Exception as e:
+                    logger.error(f"Error sending data to Arduino: {str(e)}")
             
             # Send data to client for preview
             frame_count += 1
             now = time.time()
             if now - last_update_time >= 0.1:  # Update client at 10 Hz
                 fps = frame_count / (now - last_update_time)
+                
+                # Prepare data for the client
+                # The client expects either a flat array [r,g,b,r,g,b,...] or array of tuples
+                if led_colors and isinstance(led_colors[0], tuple):
+                    # Convert tuples to flat array for web client (historically expected format)
+                    flat_colors = []
+                    for r, g, b in led_colors[:60]:  # Limit to first 60 LEDs
+                        flat_colors.extend([r, g, b])
+                    client_colors = flat_colors
+                else:
+                    # Already flat, just limit size
+                    client_colors = led_colors[:60*3]
+                
+                buffer_fullness = 0
+                if arduino:
+                    buffer_fullness = arduino.buffer_fullness
+                
                 socketio.emit('visualization_data', {
-                    'led_colors': led_colors[:60*3],  # Limit data size
+                    'led_colors': client_colors,
                     'beat': beat_detected,
-                    'fps': round(fps, 1)
+                    'fps': round(fps, 1),
+                    'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
                 frame_count = 0
@@ -266,7 +302,7 @@ def main():
     parser = argparse.ArgumentParser(description='LED Web Visualizer')
     parser.add_argument('--host', type=str, default='0.0.0.0',
                         help='Host to run the server on')
-    parser.add_argument('--port', type=int, default=5000,
+    parser.add_argument('--port', type=int, default=5050,
                         help='Port to run the server on')
     parser.add_argument('--list-devices', action='store_true',
                         help='List available audio devices and exit')
@@ -284,13 +320,11 @@ def main():
                 print(f"  Output channels: {device['max_output_channels']}")
         return
     
-    print(f"Starting LED Web Visualizer server at http://{args.host}:{args.port}")
-    print("Available visualization types:")
-    for vis_type in VISUALIZATIONS.keys():
-        print(f"  - {vis_type}")
+    print("Starting LED Web Visualizer server at http://0.0.0.0:5050")
+    print("Available visualization types: beat_pulse, spectrum, energy_beat")
     
     # Start the server
-    socketio.run(app, host=args.host, port=args.port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5050, debug=True, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
     main() 

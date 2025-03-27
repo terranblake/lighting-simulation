@@ -396,12 +396,34 @@
         // Update LED display
         function updateLEDs(colors) {
             const leds = ledStrip.children;
-            let colorIndex = 0;
+            
+            // Check if colors is an array of tuples or a flat array
+            const isTupleFormat = Array.isArray(colors) && 
+                                  colors.length > 0 && 
+                                  Array.isArray(colors[0]);
             
             for (let i = 0; i < leds.length; i++) {
-                const r = colors[colorIndex++];
-                const g = colors[colorIndex++];
-                const b = colors[colorIndex++];
+                let r, g, b;
+                
+                if (isTupleFormat) {
+                    // Handle tuple format [(r,g,b), (r,g,b), ...]
+                    if (i < colors.length) {
+                        [r, g, b] = colors[i];
+                    } else {
+                        [r, g, b] = [0, 0, 0];
+                    }
+                } else {
+                    // Handle flat format [r,g,b,r,g,b,...]
+                    const colorIndex = i * 3;
+                    if (colorIndex + 2 < colors.length) {
+                        r = colors[colorIndex];
+                        g = colors[colorIndex + 1];
+                        b = colors[colorIndex + 2];
+                    } else {
+                        [r, g, b] = [0, 0, 0];
+                    }
+                }
+                
                 leds[i].style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
             }
         }
