@@ -862,8 +862,14 @@ class CenterGradientVisualizer(BaseVisualizer):
         self.steady_state_range = []  # Recent amplitude values for variance calculation
         self.range_history_size = 30  # How many frames to consider for variance check
         self.current_hue = 0.0        # Current base hue (0-1)
-        self.cooling_speed = 0.005    # How fast to cycle colors when in cooling mode
-        self.cooling_saturation = 0.8 # Color saturation during cooling effect
+        self.cooling_speed = 0.001    # How fast to cycle colors when in cooling mode
+        self.cooling_saturation = 0.5 # Color saturation during cooling effect
+        
+        # Radiating cooling effect parameters
+        self.cooling_radius = 0.0        # Current radius of the cooling effect (0.0-1.0)
+        self.cooling_radius_speed = 0.02 # How fast the cooling effect propagates outward
+        self.cooling_radius_max = 1.0    # Maximum radius of cooling effect (1.0 = full strip)
+        self.cooling_active_prev = False # Track if cooling was active on previous frame
         
         # Color palette when in cooling mode
         self.color_palette = [
@@ -981,11 +987,27 @@ class CenterGradientVisualizer(BaseVisualizer):
         # Determine if cooling effect is active
         cooling_active = self.color_cooling and self.use_color and self.steady_state_counter >= self.steady_state_threshold
         
-        # Update color cycle for cooling effect
+        # Handle radiating cooling effect
         if cooling_active:
-            # Cycle through hues more quickly when in cooling mode
+            # When first activating cooling, reset radius to start from center
+            if not self.cooling_active_prev:
+                self.cooling_radius = 0.0
+            
+            # Gradually increase cooling radius over time to create the radiating effect
+            # The speed increases with the steady state counter to make it more dynamic
+            radius_speed = self.cooling_radius_speed * (1.0 + min(1.0, (self.steady_state_counter - self.steady_state_threshold) / 120))
+            self.cooling_radius = min(self.cooling_radius_max, self.cooling_radius + radius_speed)
+            
+            # Update color cycle
             cooling_speed = self.cooling_speed * (1.0 + min(1.0, (self.steady_state_counter - self.steady_state_threshold) / 60))
             self.current_hue = (self.current_hue + cooling_speed) % 1.0
+        else:
+            # Gradually decrease radius when cooling effect is no longer active
+            # This creates a smooth transition back to white
+            self.cooling_radius = max(0.0, self.cooling_radius - self.cooling_radius_speed * 2)
+        
+        # Save cooling state for next frame
+        self.cooling_active_prev = cooling_active
         
         # Calculate the center point
         center = self.num_leds // 2
@@ -1021,13 +1043,22 @@ class CenterGradientVisualizer(BaseVisualizer):
                 # Apply global brightness
                 value = min(1.0, edge_brightness * brightness)
                 
-                if cooling_active:
-                    # Use color with cooling effect
-                    # Create gradient from center (pure color) to edges (whiter)
-                    # This makes the cooling effect more visible while keeping the white gradient aesthetic
+                # Calculate normalized distance for cooling effect (0.0-1.0)
+                # This is used to determine if a pixel is within the cooling radius
+                normalized_distance = distance_from_center / max_distance
+                
+                # Apply cooling effect only to LEDs within the current cooling radius
+                if self.cooling_radius > 0 and normalized_distance <= self.cooling_radius:
+                    # Calculate how far into the cooling wave this pixel is
+                    # 0.0 = at the edge of the wave, 1.0 = at the center or well inside the wave
+                    wave_position = min(1.0, (self.cooling_radius - normalized_distance) / self.cooling_radius)
                     
-                    # Calculate color saturation (1.0 at center, lower at edges)
-                    position_saturation = max(0.0, self.cooling_saturation * (1.0 - relative_pos))
+                    # Increase saturation near the edge of the cooling wave for a wave-like effect
+                    # This creates a visual wave front at the edge of the propagation
+                    wave_factor = 1.0 - pow(1.0 - wave_position, 2)  # Non-linear falloff from edge
+                    
+                    # Calculate color saturation (stronger at center, fading to edges)
+                    position_saturation = max(0.0, self.cooling_saturation * (1.0 - relative_pos) * wave_factor)
                     
                     # Calculate cooling effect strength based on how long we've been in steady state
                     cooling_strength = min(1.0, (self.steady_state_counter - self.steady_state_threshold) / 60)
@@ -1111,6 +1142,12 @@ class CenterGradientVisualizer(BaseVisualizer):
             try:
                 value = float(value)
                 self.cooling_saturation = max(0.0, min(1.0, value))
+            except ValueError:
+                pass
+        elif param == "cooling_radius_speed":
+            try:
+                value = float(value)
+                self.cooling_radius_speed = max(0.001, min(0.1, value))
             except ValueError:
                 pass
 
