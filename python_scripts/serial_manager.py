@@ -57,7 +57,7 @@ class SerialManager:
         
         # Differential encoding
         self.previous_colors = [(0, 0, 0)] * num_leds
-        self.use_differential = False   # Disable differential encoding as it can cause sync issues
+        self.use_differential = False   # Temporarily disable differential encoding until issues are fixed
         self.full_refresh_interval = 30  # Send full frame every N frames
         self.change_threshold = 3      # Minimum RGB difference to consider a change
         
@@ -80,8 +80,8 @@ class SerialManager:
             self.serial_connection.reset_input_buffer()
             self.serial_connection.reset_output_buffer()
             
-            # Wait for Arduino to initialize (reduced from 2 seconds to 1)
-            time.sleep(1)
+            # Wait for Arduino to initialize
+            time.sleep(2)
             
             # Check if Arduino is ready by reading any available data
             if self.serial_connection.in_waiting:
@@ -236,17 +236,17 @@ class SerialManager:
         # Log current status
         logging.debug(f"FPS Control: Current target FPS: {self.target_fps}, Buffer: {self.buffer_fullness * 100:.1f}%, Avg ack time: {avg_ack_time * 1000:.1f}ms")
         
-        # Decision logic for FPS adjustment - be less aggressive about decreasing FPS
-        if self.buffer_fullness > 0.85 or avg_ack_time > 0.03:  # Only reduce at higher thresholds
+        # Decision logic for FPS adjustment
+        if self.buffer_fullness > self.buffer_high_threshold or avg_ack_time > self.ack_time_high_threshold:
             # Buffer is getting full or Arduino is taking too long to respond - slow down
-            new_target = max(self.target_fps - self.fps_step_down / 2, self.min_target_fps)  # Reduce by half the step
+            new_target = max(self.target_fps - self.fps_step_down, self.min_target_fps)
             if new_target < self.target_fps:
                 self.target_fps = new_target
                 self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
                 logging.info(f"FPS Control: Decreasing target FPS to {self.target_fps} (buffer: {self.buffer_fullness * 100:.1f}%, ack: {avg_ack_time * 1000:.1f}ms)")
         elif self.buffer_fullness < self.buffer_low_threshold and avg_ack_time < self.ack_time_high_threshold / 2:
-            # Buffer has room and Arduino is responding quickly - speed up more aggressively
-            new_target = min(self.target_fps + self.fps_step_up * 2, self.max_fps)  # Double the increase step
+            # Buffer has room and Arduino is responding quickly - speed up
+            new_target = min(self.target_fps + self.fps_step_up, self.max_fps)
             if new_target > self.target_fps:
                 self.target_fps = new_target
                 self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
@@ -269,16 +269,14 @@ class SerialManager:
         current_time = time.time()
         elapsed = current_time - self.last_frame_time
         
-        # Check buffer status more efficiently (less frequently)
+        # Check buffer status more frequently
         if current_time - self.last_buffer_check > self.buffer_check_interval:
             self.check_buffer_status()
             self.last_buffer_check = current_time
             
-            if self.buffer_fullness > 0.95:  # Critical buffer level
+            if self.buffer_fullness > 0.9:  # Critical buffer level
                 logging.warning(f"Arduino buffer critical at {self.buffer_fullness * 100:.1f}% - dropping frame")
                 self.dropped_frames += 1
-                # Add a small sleep to give Arduino time to recover
-                time.sleep(0.01)
                 return False
         
         # Apply frame rate limiting unless forced
@@ -290,81 +288,107 @@ class SerialManager:
         if len(led_colors) > self.num_leds:
             led_colors = led_colors[:self.num_leds]
         
-        # Ensure all LEDs have values - more efficiently
-        led_count = len(led_colors)
-        if led_count < self.num_leds:
-            led_colors = led_colors + [(0, 0, 0)] * (self.num_leds - led_count)
+        # Ensure all LEDs have values
+        while len(led_colors) < self.num_leds:
+            led_colors.append((0, 0, 0))
         
-        # Debug log a sample of LEDs - less frequently
-        if self.debug_mode and self.frame_count % 200 == 0:
+        # Debug log a sample of LEDs
+        if self.debug_mode and self.frame_count % 100 == 0:
             sample = led_colors[:2]
             logging.debug(f"Sending LED frame {self.frame_count}, sample: {sample}")
         
         with self.lock:
             try:
-                # Prepare the data in memory first - more efficient than writing byte by byte
-                # Use a consistent header format that Arduino expects: 0xAA byte
-                header_byte = 0xAA
-                data = bytearray([header_byte]) 
+                # Determine whether to use differential encoding or full frame
+                use_diff = self.use_differential and (self.frame_count % self.full_refresh_interval != 0)
                 
-                # Add number of LEDs (ensure it's just a single byte)
-                num_leds_to_send = min(self.num_leds, 255)  # Cap at 255 for single byte
-                data.extend([num_leds_to_send])
+                if use_diff:
+                    # Differential encoding - only send changed LEDs
+                    changed_indices = []
+                    
+                    # Find indices of LEDs that have changed significantly
+                    for i, (new_color, old_color) in enumerate(zip(led_colors, self.previous_colors)):
+                        new_r, new_g, new_b = new_color
+                        old_r, old_g, old_b = old_color
+                        
+                        # Calculate magnitude of change
+                        r_diff = abs(new_r - old_r)
+                        g_diff = abs(new_g - old_g)
+                        b_diff = abs(new_b - old_b)
+                        
+                        # Check if change exceeds threshold
+                        if r_diff > self.change_threshold or g_diff > self.change_threshold or b_diff > self.change_threshold:
+                            changed_indices.append(i)
+                    
+                    if changed_indices:
+                        # Send header: 0xBB (differential frame) followed by number of changed LEDs
+                        data = bytearray([0xBB, len(changed_indices)])
+                        
+                        # Add each changed LED: index + RGB
+                        for idx in changed_indices:
+                            r, g, b = led_colors[idx]
+                            data.extend([idx, r, g, b])
+                        
+                        # Log statistics if enabled
+                        if self.debug_mode and self.frame_count % 30 == 0:
+                            logging.debug(f"Differential frame: {len(changed_indices)}/{self.num_leds} LEDs changed")
+                    else:
+                        # No significant changes, skip frame
+                        self.frame_count += 1
+                        self.last_frame_time = current_time
+                        return True
+                else:
+                    # Full frame - send header: 0xAA followed by number of LEDs
+                    data = bytearray([0xAA, len(led_colors)])
+                    
+                    # Add RGB values for each LED to the buffer
+                    for r, g, b in led_colors:
+                        data.extend([r, g, b])
                 
-                # Add RGB values for each LED to the buffer
-                for i in range(num_leds_to_send):
-                    r, g, b = led_colors[i]
-                    # Ensure values are integers within 0-255 range
-                    r_val = max(0, min(255, int(r)))
-                    g_val = max(0, min(255, int(g)))
-                    b_val = max(0, min(255, int(b)))
-                    data.extend([r_val, g_val, b_val])
+                # Store current colors for next differential frame
+                self.previous_colors = led_colors.copy()
                 
-                # Send the entire frame in one write operation
+                # Send the frame
                 ack_start_time = time.time()
                 self.serial_connection.write(data)
                 self.serial_connection.flush()
                 
-                # Add a small delay after sending to let Arduino process
-                time.sleep(0.001)
-                
-                # Process any incoming data with a shorter timeout
+                # Process any incoming acknowledgments with timeout
                 ack_received = False
-                max_wait = 0.05  # shorter timeout
                 
-                # Clear any existing data in the input buffer before waiting for ack
-                if self.serial_connection.in_waiting:
+                while time.time() - ack_start_time < 0.1:  # 100ms timeout
                     self.process_incoming_data()
-                
-                # Wait for ack with timeout
-                start_time = time.time()
-                while time.time() - start_time < max_wait:
-                    if self.serial_connection.in_waiting:
-                        self.process_incoming_data()
+                    
+                    # If we've processed all pending data, we're done
+                    if not self.serial_connection.in_waiting:
                         ack_received = True
                         break
-                    time.sleep(0.0005)  # Very short sleep to avoid busy waiting
+                    
+                    time.sleep(0.001)  # Small sleep to avoid busy waiting
                 
                 # Calculate acknowledgment time
                 ack_time = time.time() - ack_start_time
                 
+                # Adjust FPS based on acknowledgment time and buffer status
+                if ack_received:
+                    self.adjust_fps(ack_time)
+                
                 self.frame_count += 1
                 self.last_frame_time = current_time
                 
-                # Log less frequently
-                if self.frame_count % 300 == 0:
+                if self.frame_count % 100 == 0:
                     actual_fps = 1.0 / (elapsed if elapsed > 0 else 0.001)
-                    logging.info(f"Sent frame {self.frame_count}, Actual FPS: {actual_fps:.1f}, Target FPS: {self.target_fps}, Buffer: {self.buffer_fullness*100:.1f}%")
+                    encoding_type = "differential" if use_diff else "full"
+                    logging.info(f"Sent {encoding_type} frame {self.frame_count}, Actual FPS: {actual_fps:.1f}, Target FPS: {self.target_fps}, Ack time: {ack_time*1000:.1f}ms, Buffer: {self.buffer_fullness*100:.1f}%")
                 
                 return True
                 
             except Exception as e:
                 logging.error(f"Error sending data to Arduino: {str(e)}")
-                # Less aggressive throttling on error
-                if self.target_fps > 30:  # Only reduce if above 30 FPS
-                    self.target_fps = max(self.target_fps - 5, 30)
-                    self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
-                    logging.info(f"Error encountered - decreasing target FPS to {self.target_fps}")
+                # Decrease target FPS after an error
+                self.target_fps = max(self.target_fps - self.fps_step_down, self.min_target_fps)
+                self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
+                logging.info(f"Error encountered - decreasing target FPS to {self.target_fps}")
                 return False
     
     def clear_leds(self):

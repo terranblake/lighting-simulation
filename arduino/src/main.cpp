@@ -12,10 +12,10 @@
 
 // Serial communication configuration
 #define BAUD_RATE   115200
-#define HEADER_MARKER 0xAA
-#define ACK_SUCCESS  0x01
-#define ACK_ERROR    0xFF
-#define DEBUG_PRINT  0x02  // Special command for debug printing
+#define HEADER_FULL 0xAA    // Full frame update
+#define HEADER_DELTA 0xBB   // Differential frame update
+#define BUFFER_CHECK 0x42   // ASCII 'B' - Check buffer status command
+#define DEBUG_PRINT  0x02    // Debug message marker
 #define BUFFER_STATUS 'B'  // Command to query buffer status
 
 // Buffer management
@@ -47,9 +47,15 @@ bool firstFrame = true;
 
 // Forward declarations
 void processFrame(uint8_t numLeds);
+void processDeltaFrame(uint8_t numChangedLeds);
 void sendDebugMessage(const char *message);
 void sendBufferStatus();
 float getBufferUsage();
+bool waitForData(uint16_t bytesNeeded, uint16_t timeoutMs);
+void flushInputBuffer(uint16_t maxBytes);
+
+#define ACK_SUCCESS 0x01    // Acknowledgment - success
+#define ACK_ERROR 0xFF      // Acknowledgment - error
 
 void setup() {
   // Initialize serial communication
@@ -89,75 +95,85 @@ void setup() {
 }
 
 void loop() {
-  // Process incoming data
+  // Check if there's serial data available
   if (Serial.available() > 0) {
-    uint8_t cmd = Serial.peek();
+    uint8_t header = Serial.read();
     
-    // Check for buffer status request
-    if (cmd == BUFFER_STATUS) {
-      Serial.read(); // Consume the command byte
-      sendBufferStatus();
-      return;
-    }
-    
-    // Check for animation frame
-    if (cmd == HEADER_MARKER && Serial.available() >= 2) {
-      Serial.read(); // Consume header
-      uint8_t numLeds = Serial.read();
-      
-      // Check if we're processing frames too quickly
-      unsigned long currentTime = millis();
-      if (currentTime - lastFrameProcessed < MIN_FRAME_INTERVAL) {
-        // Drop this frame to maintain frame rate
-        // Discard the expected data
-        uint16_t bytesToDiscard = numLeds * 3;
-        for (uint16_t i = 0; i < bytesToDiscard && Serial.available(); i++) {
-          Serial.read();
+    // Check for header bytes we understand
+    if (header == HEADER_FULL) {
+      // Read number of LEDs
+      if (waitForData(1, 100)) {  // Wait for 1 byte with 100ms timeout
+        uint8_t numLeds = Serial.read();
+        processFrame(numLeds);
+      } else {
+        // Timeout waiting for LED count
+        if (DEBUG_MODE) {
+          sendDebugMessage("Timeout waiting for LED count");
         }
-        droppedFrames++;
-        
-        if (DEBUG_MODE && droppedFrames % 10 == 1) {
-          char buffer[32];
-          sprintf(buffer, "Dropped frame: %lu", droppedFrames);
-          sendDebugMessage(buffer);
-        }
-        return;
+        Serial.write(ACK_ERROR);
       }
-      
-      // Process the frame
-      processFrame(numLeds);
-      lastFrameProcessed = currentTime;
-    } else if (Serial.available() >= 2 && cmd != HEADER_MARKER) {
-      // Invalid header, flush buffer
-      Serial.read(); // Consume the invalid byte
+    }
+    else if (header == HEADER_DELTA) {
+      // Read number of changed LEDs
+      if (waitForData(1, 100)) {  // Wait for 1 byte with 100ms timeout
+        uint8_t numChangedLeds = Serial.read();
+        processDeltaFrame(numChangedLeds);
+      } else {
+        // Timeout waiting for changed LED count
+        if (DEBUG_MODE) {
+          sendDebugMessage("Timeout waiting for changed LED count");
+        }
+        Serial.write(ACK_ERROR);
+      }
+    }
+    // Buffer status check
+    else if (header == BUFFER_CHECK) {
+      // Respond with buffer status (0-255 representing 0-100%)
+      uint8_t bufferStatus = (uint8_t)(getBufferUsage() * 255);
+      Serial.write(bufferStatus);
       
       if (DEBUG_MODE) {
         char buffer[32];
-        sprintf(buffer, "Bad header: 0x%02X", cmd);
+        sprintf(buffer, "Buffer status: %d%% full", (bufferStatus * 100) / 255);
+        sendDebugMessage(buffer);
+      }
+    }
+    // Unknown command
+    else {
+      if (DEBUG_MODE) {
+        char buffer[24];
+        sprintf(buffer, "Bad header: 0x%02X", header);
         sendDebugMessage(buffer);
       }
       
-      // Discard some data to avoid buffer filling up
-      for (int i = 0; i < 10 && Serial.available(); i++) {
-        Serial.read();
-      }
-      
-      bufferOverflows++;
+      // Flush a few bytes to try to recover from bad state
+      flushInputBuffer(10);  // Read up to 10 bytes to try to resync
+      Serial.write(ACK_ERROR);
     }
   }
   
-  // If buffer is getting full, send a warning
-  if (Serial.available() > SERIAL_BUFFER_SIZE * 0.8) {
-    if (DEBUG_MODE) {
-      sendDebugMessage("WARNING: Serial buffer almost full");
+  // Very small delay to prevent hogging the CPU
+  delayMicroseconds(100);
+}
+
+// Helper to wait for a specific amount of data with timeout
+bool waitForData(uint16_t bytesNeeded, uint16_t timeoutMs) {
+  unsigned long startTime = millis();
+  while (Serial.available() < bytesNeeded) {
+    if (millis() - startTime > timeoutMs) {
+      return false;  // Timeout
     }
-    
-    // Discard some data to prevent overflow
-    while (Serial.available() > SERIAL_BUFFER_SIZE / 2) {
-      Serial.read();
-    }
-    
-    bufferOverflows++;
+    delayMicroseconds(100);  // Short delay to avoid hogging CPU
+  }
+  return true;
+}
+
+// Helper to flush input buffer
+void flushInputBuffer(uint16_t maxBytes) {
+  uint16_t count = 0;
+  while (Serial.available() > 0 && count < maxBytes) {
+    Serial.read();
+    count++;
   }
 }
 
@@ -287,6 +303,118 @@ void processFrame(uint8_t numLeds) {
       sendDebugMessage(buffer);
     }
     Serial.write(ACK_ERROR);
+  }
+}
+
+void processDeltaFrame(uint8_t numChangedLeds) {
+  // Skip frame if we're processing frames too quickly
+  unsigned long frameTime = millis();
+  if (lastFrameProcessed > 0 && frameTime - lastFrameProcessed < MIN_FRAME_INTERVAL) {
+    // Drop this frame to maintain frame rate
+    droppedFrames++;
+    
+    // Read and discard the expected data (4 bytes per changed LED)
+    flushInputBuffer(numChangedLeds * 4);
+    
+    // Send acknowledgment
+    Serial.write(ACK_SUCCESS);
+    return;
+  }
+  
+  // Calculate bytes to read (index + RGB = 4 bytes per changed LED)
+  uint16_t bytesToRead = numChangedLeds * 4;
+  
+  // Check if frame size is reasonable
+  if (numChangedLeds > NUM_LEDS) {
+    if (DEBUG_MODE) {
+      char buffer[48];
+      sprintf(buffer, "Invalid delta frame size: %d LEDs", numChangedLeds);
+      sendDebugMessage(buffer);
+    }
+    flushInputBuffer(bytesToRead);  // Discard data
+    Serial.write(ACK_ERROR);
+    return;
+  }
+  
+  // Wait for all the data to arrive
+  if (!waitForData(bytesToRead, 100)) {
+    // Timeout waiting for data
+    if (DEBUG_MODE) {
+      sendDebugMessage("Timeout waiting for delta frame data");
+    }
+    flushInputBuffer(Serial.available());  // Discard partial data
+    Serial.write(ACK_ERROR);
+    return;
+  }
+  
+  // Now read and process the data
+  unsigned long updateStart = millis();
+  bool allDataValid = true;
+  
+  // Read and process all changed LEDs
+  for (uint8_t i = 0; i < numChangedLeds; i++) {
+    // Read LED index and color
+    uint8_t ledIndex = Serial.read();
+    uint8_t r = Serial.read();
+    uint8_t g = Serial.read();
+    uint8_t b = Serial.read();
+    
+    // Sanity check the LED index
+    if (ledIndex < NUM_LEDS) {
+      leds[ledIndex].r = r;
+      leds[ledIndex].g = g;
+      leds[ledIndex].b = b;
+    } else {
+      allDataValid = false;
+    }
+  }
+  
+  // Update the LED strip
+  FastLED.setMaxRefreshRate(0, true);
+  FastLED.show();
+  
+  unsigned long updateTime = millis() - updateStart;
+  lastFrameProcessed = millis();
+  
+  // Calculate frame rate
+  unsigned long currentTime = millis();
+  if (lastFrameTime > 0) {
+    float timeDiff = currentTime - lastFrameTime;
+    if (timeDiff > 0) {
+      frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
+      if (frameRate < 0 || isnan(frameRate)) {
+        frameRate = 0.0;
+      }
+    }
+  } else {
+    frameRate = 0.0;
+  }
+  lastFrameTime = currentTime;
+  frameCount++;
+  
+  // Track processing time
+  totalProcessingTime += (millis() - updateStart);
+  
+  // Send binary acknowledgment
+  Serial.write(allDataValid ? ACK_SUCCESS : ACK_ERROR);
+  
+  // Send debug info periodically
+  if (DEBUG_MODE && (frameCount % 30 == 0)) {
+    char buffer[64];
+    int fps_int = (int)frameRate;
+    int fps_dec = (int)((frameRate - fps_int) * 10);
+    
+    // Calculate average processing time
+    unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
+    
+    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
+            frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
+    sendDebugMessage(buffer);
+    
+    // Send a separate clean FPS message to make parsing easier
+    char fpsbuffer[20];
+    sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
+    sendDebugMessage(fpsbuffer);
   }
 }
 
