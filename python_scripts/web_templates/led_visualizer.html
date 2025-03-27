@@ -224,29 +224,36 @@
             max-height: 300px;
             padding: 15px;
         }
+        
+        .info-banner {
+            background-color: #3d3d3d;
+            color: #f5f5f5;
+            text-align: center;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .disabled-field {
+            opacity: 0.5;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>LED Strip Visualizer</h1>
         
+        <div class="info-banner">
+            <span>⚠️ Mock mode enabled by default - no hardware required to test</span>
+        </div>
+        
         <div class="alerts-container" id="alerts">
             <!-- Alerts will be inserted here -->
         </div>
 
         <div class="control-panel">
-            <div class="form-group">
-                <label for="audio-device">Audio Device</label>
-                <select id="audio-device">
-                    <option value="">Loading devices...</option>
-                </select>
-                
-                <div style="margin-top: 10px;">
-                    <input type="checkbox" id="use-mock-audio" style="width: auto; margin-right: 10px;">
-                    <label for="use-mock-audio" style="display: inline;">Use synthetic audio (no real audio input)</label>
-                </div>
-            </div>
-            
             <div class="form-group">
                 <label for="visualization-type">Visualization Type</label>
                 <select id="visualization-type" class="form-select">
@@ -269,13 +276,32 @@
                 </div>
             </div>
             
-            <div class="form-group">
-                <label for="arduino-port">Arduino Port</label>
-                <input type="text" id="arduino-port" value="/dev/tty.usbserial-110">
+            <div class="config-drawer-container">
+                <button class="config-drawer-toggle" id="devices-drawer-toggle">
+                    Devices <span id="devices-drawer-icon">▼</span>
+                </button>
+                <div class="config-drawer" id="devices-drawer">
+                    <div class="form-group">
+                        <label for="audio-device">Audio Device</label>
+                        <select id="audio-device">
+                            <option value="">Loading devices...</option>
+                        </select>
+                        
+                        <div style="margin-top: 10px;">
+                            <input type="checkbox" id="use-mock-audio" style="width: auto; margin-right: 10px;" checked>
+                            <label for="use-mock-audio" style="display: inline;">Use synthetic audio (no real audio input)</label>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="arduino-port">Arduino Port</label>
+                        <input type="text" id="arduino-port" value="/dev/tty.usbserial-110">
 
-                <div style="margin-top: 10px;">
-                    <input type="checkbox" id="mock-arduino" style="width: auto; margin-right: 10px;">
-                    <label for="mock-arduino" style="display: inline;">Mock Arduino (use if no hardware connected)</label>
+                        <div style="margin-top: 10px;">
+                            <input type="checkbox" id="mock-arduino" style="width: auto; margin-right: 10px;" checked>
+                            <label for="mock-arduino" style="display: inline;">Mock Arduino (use if no hardware connected)</label>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -371,6 +397,9 @@
         // Connect to Socket.IO server
         function connectSocket() {
             socket = io();
+            
+            // Check mock settings on startup and update UI
+            updateMockSettings();
             
             socket.on('connect', () => {
                 showAlert('Connected to server', 'success');
@@ -652,6 +681,16 @@
             configDrawerIcon.textContent = configDrawer.classList.contains('open') ? '▲' : '▼';
         });
         
+        // Devices drawer toggle
+        const devicesDrawerToggle = document.getElementById('devices-drawer-toggle');
+        const devicesDrawer = document.getElementById('devices-drawer');
+        const devicesDrawerIcon = document.getElementById('devices-drawer-icon');
+        
+        devicesDrawerToggle.addEventListener('click', function() {
+            devicesDrawer.classList.toggle('open');
+            devicesDrawerIcon.textContent = devicesDrawer.classList.contains('open') ? '▲' : '▼';
+        });
+        
         // Add event listeners for amplitude emphasis controls
         const emphasisToggle = document.getElementById('emphasis-toggle');
         const emphasisThreshold = document.getElementById('emphasis-threshold');
@@ -691,6 +730,32 @@
         initializeLEDs();
         connectSocket();
         updateButtonState();
+        
+        // Add event listeners for mock settings
+        document.getElementById('use-mock-audio').addEventListener('change', updateMockSettings);
+        document.getElementById('mock-arduino').addEventListener('change', updateMockSettings);
+        
+        // Update UI based on mock settings
+        function updateMockSettings() {
+            const useMockAudio = document.getElementById('use-mock-audio').checked;
+            const mockArduino = document.getElementById('mock-arduino').checked;
+            
+            // Update audio device field - directly get the select element 
+            const audioDeviceSelect = document.getElementById('audio-device');
+            if (useMockAudio) {
+                audioDeviceSelect.parentElement.classList.add('disabled-field');
+            } else {
+                audioDeviceSelect.parentElement.classList.remove('disabled-field');
+            }
+            
+            // Update Arduino port field - directly get the input element
+            const arduinoPortInput = document.getElementById('arduino-port');
+            if (mockArduino) {
+                arduinoPortInput.parentElement.classList.add('disabled-field');
+            } else {
+                arduinoPortInput.parentElement.classList.remove('disabled-field');
+            }
+        }
     </script>
 </body>
 </html> 
