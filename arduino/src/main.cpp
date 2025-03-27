@@ -212,6 +212,11 @@ void processFrame(uint8_t numLeds) {
       sprintf(buffer, "Frame: %lu, FPS: %.1f, Update: %lums, Dropped: %lu", 
               frameCount, frameRate, updateTime, droppedFrames);
       sendDebugMessage(buffer);
+      
+      // Send a separate clean FPS message to make parsing easier
+      char fpsbuffer[20];
+      sprintf(fpsbuffer, "FPS: %.1f", frameRate);
+      sendDebugMessage(fpsbuffer);
     }
   } else {
     // Timeout or incorrect data length
