@@ -3,6 +3,7 @@ import time
 import struct
 import threading
 import logging
+import re
 
 class SerialManager:
     """Manages serial communication with the Arduino controlling the LED strip."""
@@ -39,6 +40,9 @@ class SerialManager:
         self.buffer_high_threshold = 0.7  # Buffer fullness threshold to decrease FPS
         self.buffer_low_threshold = 0.3  # Buffer fullness threshold to increase FPS
         self.ack_time_high_threshold = 0.02  # If ack time > 20ms, consider slowing down
+        
+        # Arduino fps tracking
+        self._arduino_fps_regex = re.compile(r'FPS:\s*([\d.]+)')  # Pattern to extract FPS from messages
         
     def connect(self, port=None):
         """Connect to the Arduino via the specified serial port."""
@@ -148,11 +152,17 @@ class SerialManager:
                         # Log the raw message first for debugging
                         logging.info(f"Arduino FPS message: '{message}'")
                         
-                        # Extract FPS value - format is: "Frame: 123, FPS: 45.6, Update: 2ms, Dropped: 0"
-                        fps_part = message.split('FPS:')[1].split(',')[0].strip()
-                        self.arduino_fps = float(fps_part)
-                        logging.info(f"Parsed Arduino FPS: {self.arduino_fps}")
-                    except (ValueError, IndexError) as e:
+                        # Try to use regex to extract FPS value for more reliable parsing
+                        match = self._arduino_fps_regex.search(message)
+                        if match:
+                            self.arduino_fps = float(match.group(1))
+                            logging.info(f"Parsed Arduino FPS: {self.arduino_fps}")
+                        else:
+                            # Fallback to splitting method if regex fails
+                            fps_part = message.split('FPS:')[1].split(',')[0].strip()
+                            self.arduino_fps = float(fps_part)
+                            logging.info(f"Parsed Arduino FPS (fallback): {self.arduino_fps}")
+                    except (ValueError, IndexError, AttributeError) as e:
                         logging.warning(f"Failed to parse FPS from message: '{message}' - {str(e)}")
                 
                 if self.debug_mode:
