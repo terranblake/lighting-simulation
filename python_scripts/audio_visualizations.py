@@ -828,7 +828,7 @@ class VUMeterVisualizer(BaseVisualizer):
 
 
 class CenterGradientVisualizer(BaseVisualizer):
-    """Visualizer that creates an expanding white pattern from center based on audio amplitude"""
+    """Visualizer that creates an expanding pattern from center based on audio amplitude with cooling effect"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
@@ -852,9 +852,32 @@ class CenterGradientVisualizer(BaseVisualizer):
         self.dynamic_range = 0.7     # Amount of dynamic range scaling to apply (0-1)
         self.response_curve = 2.0    # Exponential curve for response (higher = more contrast)
         self.average_amplitude = 0.2 # Starting average estimate
+        
+        # Cooling effect parameters
+        self.use_color = True         # Whether to use colored cooling effect or stay white
+        self.color_cooling = True     # Enable/disable cooling effect
+        self.steady_state_counter = 0 # Counter for how long amplitude has been steady
+        self.steady_state_threshold = 60 # Frames to trigger cooling effect (1 second at 60fps)
+        self.amplitude_variance = 0.1 # How much amplitude can vary to be considered "steady"
+        self.steady_state_range = []  # Recent amplitude values for variance calculation
+        self.range_history_size = 30  # How many frames to consider for variance check
+        self.current_hue = 0.0        # Current base hue (0-1)
+        self.cooling_speed = 0.005    # How fast to cycle colors when in cooling mode
+        self.cooling_saturation = 0.8 # Color saturation during cooling effect
+        
+        # Color palette when in cooling mode
+        self.color_palette = [
+            (0.0, 0.9, 0.9),  # Red (hue, saturation, value)
+            (0.1, 0.9, 0.9),  # Orange
+            (0.2, 0.9, 0.9),  # Yellow
+            (0.33, 0.9, 0.9), # Green
+            (0.5, 0.9, 0.9),  # Cyan
+            (0.66, 0.9, 0.9), # Blue
+            (0.83, 0.9, 0.9)  # Purple
+        ]
     
     def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
-        """Update visualization with expanding white pattern based on audio amplitude"""
+        """Update visualization with expanding pattern based on audio amplitude"""
         # Get parameters
         brightness = self.brightness
         sensitivity = self.sensitivity
@@ -929,6 +952,41 @@ class CenterGradientVisualizer(BaseVisualizer):
             # Fallback if average is zero
             expansion_factor = max(self.min_expansion, smoothed_energy)
         
+        # Update steady state detection (for cooling effect)
+        self.steady_state_range.append(smoothed_energy)
+        if len(self.steady_state_range) > self.range_history_size:
+            self.steady_state_range.pop(0)
+        
+        # Calculate if we're in a steady state (amplitude doesn't vary much)
+        in_steady_state = False
+        if len(self.steady_state_range) >= 10:  # Need enough samples
+            # Calculate variance in recent amplitude
+            amplitude_min = min(self.steady_state_range)
+            amplitude_max = max(self.steady_state_range)
+            variance = amplitude_max - amplitude_min
+            
+            # Check if variance is below threshold and amplitude is not too low
+            if variance < self.amplitude_variance and np.mean(self.steady_state_range) > 0.1:
+                in_steady_state = True
+        
+        # Update steady state counter
+        if in_steady_state:
+            self.steady_state_counter += 1
+            if self.steady_state_counter > 300:  # Cap at 5 seconds
+                self.steady_state_counter = 300
+        else:
+            # Reset counter slowly to avoid flickering
+            self.steady_state_counter = max(0, self.steady_state_counter - 2)
+        
+        # Determine if cooling effect is active
+        cooling_active = self.color_cooling and self.use_color and self.steady_state_counter >= self.steady_state_threshold
+        
+        # Update color cycle for cooling effect
+        if cooling_active:
+            # Cycle through hues more quickly when in cooling mode
+            cooling_speed = self.cooling_speed * (1.0 + min(1.0, (self.steady_state_counter - self.steady_state_threshold) / 60))
+            self.current_hue = (self.current_hue + cooling_speed) % 1.0
+        
         # Calculate the center point
         center = self.num_leds // 2
         
@@ -963,9 +1021,27 @@ class CenterGradientVisualizer(BaseVisualizer):
                 # Apply global brightness
                 value = min(1.0, edge_brightness * brightness)
                 
-                # Set white color with calculated brightness
-                white_value = int(255 * value)
-                self.led_colors[i] = (white_value, white_value, white_value)
+                if cooling_active:
+                    # Use color with cooling effect
+                    # Create gradient from center (pure color) to edges (whiter)
+                    # This makes the cooling effect more visible while keeping the white gradient aesthetic
+                    
+                    # Calculate color saturation (1.0 at center, lower at edges)
+                    position_saturation = max(0.0, self.cooling_saturation * (1.0 - relative_pos))
+                    
+                    # Calculate cooling effect strength based on how long we've been in steady state
+                    cooling_strength = min(1.0, (self.steady_state_counter - self.steady_state_threshold) / 60)
+                    
+                    # Blend between white and color based on cooling strength
+                    effective_saturation = position_saturation * cooling_strength
+                    
+                    # Get the RGB color
+                    r, g, b = self._hsv_to_rgb(self.current_hue, effective_saturation, value)
+                    self.led_colors[i] = (r, g, b)
+                else:
+                    # Set white color with calculated brightness (original behavior)
+                    white_value = int(255 * value)
+                    self.led_colors[i] = (white_value, white_value, white_value)
         
         return self.get_colors()
     
@@ -1007,6 +1083,34 @@ class CenterGradientVisualizer(BaseVisualizer):
             try:
                 value = float(value)
                 self.adaptation_rate = max(0.001, min(0.1, value))
+            except ValueError:
+                pass
+        elif param == "use_color":
+            self.use_color = bool(value)
+        elif param == "color_cooling":
+            self.color_cooling = bool(value)
+        elif param == "steady_state_threshold":
+            try:
+                value = int(value)
+                self.steady_state_threshold = max(15, min(300, value))
+            except ValueError:
+                pass
+        elif param == "amplitude_variance":
+            try:
+                value = float(value)
+                self.amplitude_variance = max(0.01, min(0.5, value))
+            except ValueError:
+                pass
+        elif param == "cooling_speed":
+            try:
+                value = float(value)
+                self.cooling_speed = max(0.001, min(0.05, value))
+            except ValueError:
+                pass
+        elif param == "cooling_saturation":
+            try:
+                value = float(value)
+                self.cooling_saturation = max(0.0, min(1.0, value))
             except ValueError:
                 pass
 
