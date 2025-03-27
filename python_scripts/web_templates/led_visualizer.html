@@ -285,6 +285,7 @@
                     <span id="arduino-fps" class="metric metric-highlight">Arduino: 0</span>
                     <span id="sent-fps" class="metric">Sent: 0</span>
                     <span id="buffer" class="metric">Buffer: 0%</span>
+                    <span id="update-rate" class="metric">Update: 0 Hz</span>
                 </div>
             </div>
         </div>
@@ -357,7 +358,6 @@
                 showAlert('Visualization stopped', 'success');
                 isRunning = false;
                 updateButtonState();
-                setStatus('Stopped');
                 fpsText.textContent = '0 FPS';
                 document.getElementById('target-fps').textContent = 'Target: 0';
                 document.getElementById('arduino-fps').textContent = 'Arduino: 0';
@@ -376,7 +376,7 @@
                 }
                 
                 // Update metrics
-                fpsText.textContent = `${data.fps} FPS`;
+                fpsText.textContent = `Audio: ${data.fps}`;
                 document.getElementById('target-fps').textContent = `Target: ${data.target_fps}`;
                 document.getElementById('sent-fps').textContent = `Sent: ${data.sent_fps}`;
                 
@@ -389,6 +389,23 @@
                 arduinoFpsElement.textContent = `Arduino: ${data.arduino_fps}`;
                 
                 document.getElementById('buffer').textContent = `Buffer: ${data.buffer}%`;
+                
+                // Update the socket update rate display
+                if (data.update_rate) {
+                    document.getElementById('update-rate').textContent = `Update: ${data.update_rate} Hz`;
+                }
+                
+                // Update beat indicator
+                if (data.beat) {
+                    const beatIndicator = document.getElementById('beat-indicator');
+                    beatIndicator.classList.add('active');
+                    setTimeout(() => beatIndicator.classList.remove('active'), 100);
+                }
+
+                // Update active frequency band if available
+                if (data.active_band) {
+                    updateActiveBand(data.active_band);
+                }
             });
             
             socket.on('disconnect', () => {

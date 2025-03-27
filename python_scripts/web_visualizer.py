@@ -370,7 +370,19 @@ def run_visualization():
             # Send data to client for preview
             frame_count += 1
             now = time.time()
-            if now - last_update_time >= 0.1:  # Update client at 10 Hz
+
+            # Calculate dynamic update interval based on Arduino's processing rate
+            if arduino and arduino.arduino_fps > 0:
+                # Update at roughly the same rate as Arduino processes frames
+                # but cap between 10-30 Hz to avoid overwhelming the websocket connection
+                update_rate = min(max(arduino.arduino_fps / 4, 10), 30)
+                update_interval = 1.0 / update_rate
+            else:
+                # Fallback to 10Hz if we don't have Arduino FPS data
+                update_interval = 0.1
+            
+            # Emit data at calculated rate
+            if now - last_update_time >= update_interval:
                 fps = frame_count / (now - last_update_time)
                 
                 # Prepare data for the client
@@ -396,7 +408,7 @@ def run_visualization():
                 
                 # Log every 30 frames to avoid excessive logging
                 if frame_count % 30 == 0:
-                    logger.info(f"Sending visualization data - Current FPS: {fps:.1f}, Arduino FPS: {arduino_fps:.1f}, Target: {target_fps:.1f}")
+                    logger.info(f"Sending visualization data - Current FPS: {fps:.1f}, Arduino FPS: {arduino_fps:.1f}, Target: {target_fps:.1f}, Update Rate: {1.0/update_interval:.1f}Hz")
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
@@ -405,7 +417,8 @@ def run_visualization():
                     'target_fps': round(target_fps, 1),
                     'arduino_fps': round(arduino_fps, 1),
                     'sent_fps': round(sent_fps, 1),
-                    'buffer': round(buffer_fullness * 100, 1)
+                    'buffer': round(buffer_fullness * 100, 1),
+                    'update_rate': round(1.0/update_interval, 1)
                 })
                 last_update_time = now
                 frame_count = 0
