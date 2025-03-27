@@ -336,8 +336,7 @@ def run_visualization():
                     'target_fps': round(target_fps, 1),
                     'arduino_fps': round(arduino_fps, 1),
                     'sent_fps': round(sent_fps, 1),
-                    'buffer': round(buffer_fullness * 100, 1),
-                    'accuracy': round(100 * arduino_fps / target_fps, 1) if target_fps > 0 and visualization_type == 'perf_benchmark' else None
+                    'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
                 frame_count = 0
@@ -378,7 +377,9 @@ def main():
     
     print(f"Starting LED Web Visualizer server at http://0.0.0.0:{args.port}")
     print(f"Maximum FPS: {args.max_fps}")
-    print("Available visualization types: beat_pulse, spectrum, energy_beat, bass_impact")
+    # Print available visualization types
+    available_types = list(VISUALIZATIONS.keys())
+    print(f"Available visualization types: {', '.join(available_types)}")
     
     # Start the server
     socketio.run(app, host=args.host, port=args.port, debug=True, allow_unsafe_werkzeug=True)

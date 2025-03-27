@@ -367,9 +367,9 @@ class BassImpactVisualizer(BaseVisualizer):
         self.peak_decay = 0.985  # Slower peak decay for better dynamic range
         
         # Dynamic range control
-        self.min_threshold = 0.15  # Minimum threshold to avoid complete darkness
-        self.dynamic_range = 0.85  # Maximum range between min and max response
-        self.response_curve = 1.5  # Non-linear response curve (higher = more exponential)
+        self.min_threshold = 0.05  # Minimum threshold to avoid complete darkness
+        self.dynamic_range = 0.95  # Maximum range between min and max response
+        self.response_curve = 3  # Non-linear response curve (higher = more exponential)
         
         # Mid/high tracking for contrast
         self.mid_energy = 0.0
@@ -827,6 +827,135 @@ class VUMeterVisualizer(BaseVisualizer):
                 pass
 
 
+class CenterGradientVisualizer(BaseVisualizer):
+    """Visualizer that creates a gradient from center (black) to edges (white) with music-reactive color"""
+    
+    def __init__(self, num_leds: int = NUM_LEDS):
+        super().__init__(num_leds)
+        # Current base color (hue)
+        self.current_hue = 0.0
+        # Color rotation speed
+        self.hue_shift_speed = 0.01
+        # Color change on beat
+        self.beat_hue_jump = 0.1
+        # Energy trackers for different frequency ranges
+        self.bass_energy = 0.0
+        self.mid_energy = 0.0
+        self.high_energy = 0.0
+        # Decay rates for smoothing
+        self.energy_decay = 0.8
+        # Previous frame intensity for smoothing
+        self.prev_intensity = [0.0] * num_leds
+        # Smoothing factor for changes between frames (0-1)
+        self.transition_smoothing = 0.7
+    
+    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
+        """Update visualization based on audio with center-to-edge gradient"""
+        # Get parameters
+        brightness = self.brightness
+        sensitivity = self.sensitivity
+        
+        # Extract and update frequency band energies if available
+        if frequency_bands is not None and len(frequency_bands) >= 7:
+            # Use first bands for bass
+            current_bass = np.mean(frequency_bands[:2]) * sensitivity
+            
+            # Use middle bands for mids
+            current_mid = np.mean(frequency_bands[2:5]) * sensitivity
+            
+            # Use highest bands for highs
+            current_high = np.mean(frequency_bands[5:]) * sensitivity
+            
+            # Update running averages with decay
+            self.bass_energy = max(current_bass, self.bass_energy * self.energy_decay)
+            self.mid_energy = max(current_mid, self.mid_energy * self.energy_decay)
+            self.high_energy = max(current_high, self.high_energy * self.energy_decay)
+        else:
+            # Decay if no data
+            self.bass_energy *= self.energy_decay
+            self.mid_energy *= self.energy_decay
+            self.high_energy *= self.energy_decay
+        
+        # Update base color
+        if beat_detected:
+            # Jump to a new color on beat
+            self.current_hue = (self.current_hue + self.beat_hue_jump) % 1.0
+        else:
+            # Gradually shift hue based on bass energy
+            hue_shift = self.hue_shift_speed * (1.0 + self.bass_energy * 2)
+            self.current_hue = (self.current_hue + hue_shift) % 1.0
+        
+        # Calculate total energy for intensity
+        total_energy = self.bass_energy + self.mid_energy * 0.8 + self.high_energy * 0.6
+        energy_factor = min(1.0, total_energy)
+        
+        # Calculate the center point
+        center = self.num_leds // 2
+        
+        # Create new color array
+        new_intensity = [0.0] * self.num_leds
+        
+        # Generate the gradient from center to edges
+        for i in range(self.num_leds):
+            # Calculate distance from center (0.0 to 1.0)
+            distance = abs(i - center) / (self.num_leds // 2)
+            
+            # Apply energy modulation to the gradient
+            # Higher energy makes the gradient more pronounced
+            modulated_distance = distance * (0.5 + energy_factor * 0.5)
+            
+            # Store the new intensity value
+            new_intensity[i] = modulated_distance
+        
+        # Apply smoothing transition from previous frame
+        for i in range(self.num_leds):
+            # Blend between previous and current intensity
+            intensity = (self.prev_intensity[i] * self.transition_smoothing + 
+                        new_intensity[i] * (1 - self.transition_smoothing))
+            
+            # Set the color based on the current hue and intensity
+            if intensity < 0.05:  # Very close to center is black
+                self.led_colors[i] = (0, 0, 0)
+            else:
+                # Create gradient from pure color to white as we move outward
+                # Lower saturation = more white
+                saturation = max(0.0, 1.0 - intensity * 0.7)
+                
+                # Apply music energy to value (brightness)
+                value = min(1.0, intensity * (0.6 + energy_factor * 0.4) * brightness)
+                
+                # Get RGB color
+                self.led_colors[i] = self._hsv_to_rgb(self.current_hue, saturation, value)
+        
+        # Store current intensities for next frame
+        self.prev_intensity = new_intensity
+        
+        return self.get_colors()
+    
+    def set_param(self, param, value):
+        """Set visualizer parameters"""
+        super().set_param(param, value)
+        
+        if param == "hue_shift_speed":
+            try:
+                value = float(value)
+                self.hue_shift_speed = max(0.001, min(0.05, value))
+            except ValueError:
+                pass
+        elif param == "beat_hue_jump":
+            try:
+                value = float(value)
+                self.beat_hue_jump = max(0.05, min(0.3, value))
+            except ValueError:
+                pass
+        elif param == "transition_smoothing":
+            try:
+                value = float(value)
+                self.transition_smoothing = max(0.0, min(0.9, value))
+            except ValueError:
+                pass
+
+
 # Register available visualizations
 VISUALIZATIONS = {
     'beat_pulse': BeatPulseVisualizer,
@@ -835,6 +964,7 @@ VISUALIZATIONS = {
     'bass_impact': BassImpactVisualizer,
     'frequency_bars': FrequencyBarsVisualizer,
     'vu_meter': VUMeterVisualizer,
+    'center_gradient': CenterGradientVisualizer,
 }
 
 def create_visualizer(vis_type: str, num_leds: int = NUM_LEDS) -> BaseVisualizer:
@@ -853,6 +983,8 @@ def create_visualizer(vis_type: str, num_leds: int = NUM_LEDS) -> BaseVisualizer
         return FrequencyBarsVisualizer(num_leds)
     elif vis_type == "vu_meter":
         return VUMeterVisualizer(num_leds)
+    elif vis_type == "center_gradient":
+        return CenterGradientVisualizer(num_leds)
     else:
         # Default to spectrum visualizer
         return SpectrumVisualizer(num_leds)
