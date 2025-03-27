@@ -311,6 +311,9 @@
                 updateButtonState();
                 setStatus('Stopped');
                 fpsText.textContent = '0 FPS';
+                document.getElementById('target-fps').textContent = 'Target: 0';
+                document.getElementById('arduino-fps').textContent = 'Arduino: 0';
+                document.getElementById('buffer').textContent = 'Buffer: 0%';
                 clearLEDs();
             });
             
@@ -323,6 +326,9 @@
                     }, 100);
                 }
                 fpsText.textContent = `${data.fps} FPS`;
+                document.getElementById('target-fps').textContent = `Target: ${data.target_fps}`;
+                document.getElementById('arduino-fps').textContent = `Arduino: ${data.arduino_fps}`;
+                document.getElementById('buffer').textContent = `Buffer: ${data.buffer}%`;
             });
             
             socket.on('disconnect', () => {
