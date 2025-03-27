@@ -12,7 +12,7 @@
 #define ENABLE_SMOOTHING 0   // Set to 1 to enable color smoothing, 0 to disable for performance
 
 // Serial communication configuration
-#define BAUD_RATE   460800 // Increased from 230400 for even faster data transfer
+#define BAUD_RATE   921600 // Increased from 460800 to maximum supported rate
 #define HEADER_FULL 0xAA    // Full frame update
 #define HEADER_DELTA 0xBB   // Differential frame update
 #define BUFFER_CHECK 0x42   // ASCII 'B' - Check buffer status command
@@ -20,7 +20,7 @@
 #define BUFFER_STATUS 'B'  // Command to query buffer status
 
 // Buffer management
-#define SERIAL_BUFFER_SIZE 128  // Increased from 64 to handle higher baud rate
+#define SERIAL_BUFFER_SIZE 256  // Increased from 128 to handle higher baud rate
 #define MAX_FRAMES_QUEUE 2     // Maximum number of frames to queue
 
 // Debug mode (set to 1 to enable FPS reporting but optimize other debug code)
