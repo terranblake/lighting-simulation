@@ -198,7 +198,15 @@ void processFrame(uint8_t numLeds) {
     // Calculate frame rate
     unsigned long currentTime = millis();
     if (lastFrameTime > 0) {
-      frameRate = 0.9 * frameRate + 0.1 * (1000.0 / (currentTime - lastFrameTime));
+      float timeDiff = currentTime - lastFrameTime;
+      if (timeDiff > 0) {
+        // Valid time difference, calculate frameRate with smoothing
+        frameRate = 0.9 * frameRate + 0.1 * (1000.0 / timeDiff);
+      }
+      // Explicitly cap at 0 if something went wrong
+      if (frameRate < 0 || isnan(frameRate)) {
+        frameRate = 0.0;
+      }
     } else {
       frameRate = 0.0;  // Initialize with 0 if it's the first frame
     }
