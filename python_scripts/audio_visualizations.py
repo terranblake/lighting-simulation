@@ -33,6 +33,9 @@ class BaseVisualizer:
         self.color_mode = "rainbow"  # rainbow, single, gradient
         self.primary_color = RED
         self.secondary_color = BLUE
+        self.color_scheme = "rainbow"  # rainbow, fire, ocean, forest, neon, pastels
+        self.response_speed = 0.5  # 0.0 to 1.0, controls speed of response
+        self.smoothing_enabled = True  # Whether to use smoothing
         
     def update(self, audio_data):
         """Update the LED colors based on audio data"""
@@ -62,6 +65,14 @@ class BaseVisualizer:
         elif param == "secondary_color":
             if isinstance(value, tuple) and len(value) == 3:
                 self.secondary_color = value
+        elif param == "color_scheme":
+            valid_schemes = ["rainbow", "fire", "ocean", "forest", "neon", "pastels"]
+            if value in valid_schemes:
+                self.color_scheme = value
+        elif param == "response_speed":
+            self.response_speed = max(0.0, min(1.0, float(value)))
+        elif param == "smoothing_enabled":
+            self.smoothing_enabled = bool(value)
     
     def _scale_color(self, color, scale_factor):
         """Scale a color by a factor (0.0 - 1.0)"""
@@ -128,6 +139,56 @@ class BaseVisualizer:
         b = int(b * 255)
         
         return (r, g, b)
+
+    def _get_color_from_scheme(self, position, intensity=1.0):
+        """Get color from current color scheme based on position (0.0 - 1.0)"""
+        if self.color_scheme == "rainbow":
+            return self._hsv_to_rgb(position, 1.0, intensity)
+        elif self.color_scheme == "fire":
+            # Red to yellow gradient
+            r = 255
+            g = int(255 * position)
+            b = 0
+            return (r, g, b)
+        elif self.color_scheme == "ocean":
+            # Deep blue to cyan gradient
+            r = 0
+            g = int(155 * position)
+            b = 155 + int(100 * position)
+            return (r, g, b)
+        elif self.color_scheme == "forest":
+            # Dark green to light green gradient
+            r = int(50 * position)
+            g = 100 + int(155 * position)
+            b = int(50 * position)
+            return (r, g, b)
+        elif self.color_scheme == "neon":
+            # Purple to pink to blue cycle
+            if position < 0.33:
+                # Purple to pink
+                r = 200 + int(55 * (position * 3))
+                g = 0
+                b = 200 + int(55 * (position * 3))
+            elif position < 0.66:
+                # Pink to blue
+                r = 255 - int(255 * ((position - 0.33) * 3))
+                g = 0
+                b = 255
+            else:
+                # Blue to purple
+                r = int(200 * ((position - 0.66) * 3))
+                g = 0
+                b = 255
+            return (r, g, b)
+        elif self.color_scheme == "pastels":
+            # Soft pastel colors
+            r = 155 + int(100 * math.sin(position * 6.28))
+            g = 155 + int(100 * math.sin((position * 6.28) + 2.09))
+            b = 155 + int(100 * math.sin((position * 6.28) + 4.18))
+            return (r, g, b)
+        else:
+            # Default to rainbow
+            return self._hsv_to_rgb(position, 1.0, intensity)
 
 
 class BeatPulseVisualizer(BaseVisualizer):

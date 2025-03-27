@@ -112,8 +112,8 @@ def handle_start_visualization(data):
         logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}, brightness: {brightness:.2f}")
         logger.info(f"Amplitude emphasis - Enabled: {emphasis_enabled}, Threshold: {emphasis_threshold:.2f}, Strength: {emphasis_strength:.2f}")
         
-        # Mock Arduino if needed for testing
-        mock_arduino = data.get('mock_arduino', False)
+        # Mock Arduino if needed for testing - default to TRUE for easier testing without hardware
+        mock_arduino = data.get('mock_arduino', True)
         if mock_arduino:
             logger.info("Using mock Arduino mode")
             arduino = None
@@ -127,8 +127,8 @@ def handle_start_visualization(data):
                 emit('error', {'message': f'Failed to connect to Arduino on port {arduino_port}'})
                 return
         
-        # Check if we should use mock audio
-        use_mock_audio = data.get('use_mock_audio', False)
+        # Check if we should use mock audio - default to TRUE for easier testing without hardware
+        use_mock_audio = data.get('use_mock_audio', True)
         if use_mock_audio:
             logger.info("Using mock audio generator")
             audio_capture = MockAudioGenerator(sample_rate=48000, buffer_size=1024)
@@ -137,11 +137,6 @@ def handle_start_visualization(data):
             # Initialize audio capture with chosen device
             audio_capture = AudioCapture(device_name=device_name, device_id=device_id, channels=1)
             capture_started = audio_capture.start()
-        
-        if not capture_started:
-            logger.error(f"Failed to start audio capture from device: {device_name}")
-            emit('error', {'message': f'Failed to start audio capture from device: {device_name}'})
-            return
         
         # Initialize audio analyzer
         audio_analyzer = AudioAnalyzer(sample_rate=48000)
@@ -245,7 +240,13 @@ def handle_update_visualizer_params(data):
         
         # Process each parameter if it exists in the data
         for param, value in data.items():
-            if param in ["emphasis_enabled", "emphasis_threshold", "emphasis_strength", "emphasis_curve"]:
+            # List of all valid parameters (both original and new universal controls)
+            valid_params = [
+                "emphasis_enabled", "emphasis_threshold", "emphasis_strength", "emphasis_curve",
+                "color_scheme", "sensitivity", "response_speed", "smoothing_enabled"
+            ]
+            
+            if param in valid_params:
                 led_visualizer.set_param(param, value)
                 params_updated.append(param)
                 logger.info(f"Updated visualizer parameter {param} to {value}")

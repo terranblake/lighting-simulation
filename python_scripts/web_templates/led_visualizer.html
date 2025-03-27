@@ -310,6 +310,42 @@
                         </div>
                     </div>
                     
+                    <div class="form-group">
+                        <label for="color-scheme">Color Scheme</label>
+                        <select id="color-scheme" class="form-select">
+                            <option value="rainbow">Rainbow</option>
+                            <option value="fire">Fire</option>
+                            <option value="ocean">Ocean</option>
+                            <option value="forest">Forest</option>
+                            <option value="neon">Neon</option>
+                            <option value="pastels">Pastels</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="sensitivity-slider">Sensitivity <span id="sensitivity-value">50%</span></label>
+                        <div style="display: flex; align-items: center;">
+                            <input type="range" id="sensitivity-slider" min="1" max="100" value="50" 
+                                   style="flex-grow: 1; margin-right: 10px;">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="response-speed-slider">Response Speed <span id="response-speed-value">50%</span></label>
+                        <div style="display: flex; align-items: center;">
+                            <input type="range" id="response-speed-slider" min="1" max="100" value="50" 
+                                   style="flex-grow: 1; margin-right: 10px;">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Smoothing</label>
+                        <div class="slider-group">
+                            <input type="checkbox" id="smoothing-toggle" checked>
+                            <label for="smoothing-toggle" class="toggle-label">Enabled</label>
+                        </div>
+                    </div>
+                    
                     <div class="form-row">
                         <div class="form-group">
                             <label>Amplitude Emphasis</label>
@@ -740,21 +776,73 @@
             const useMockAudio = document.getElementById('use-mock-audio').checked;
             const mockArduino = document.getElementById('mock-arduino').checked;
             
-            // Update audio device field - directly get the select element 
+            // Update audio device field without affecting the checkbox
             const audioDeviceSelect = document.getElementById('audio-device');
             if (useMockAudio) {
-                audioDeviceSelect.parentElement.classList.add('disabled-field');
+                audioDeviceSelect.disabled = true;
+                audioDeviceSelect.classList.add('disabled-field');
             } else {
-                audioDeviceSelect.parentElement.classList.remove('disabled-field');
+                audioDeviceSelect.disabled = false;
+                audioDeviceSelect.classList.remove('disabled-field');
             }
             
-            // Update Arduino port field - directly get the input element
+            // Update Arduino port field without affecting the checkbox
             const arduinoPortInput = document.getElementById('arduino-port');
             if (mockArduino) {
-                arduinoPortInput.parentElement.classList.add('disabled-field');
+                arduinoPortInput.disabled = true;
+                arduinoPortInput.classList.add('disabled-field');
             } else {
-                arduinoPortInput.parentElement.classList.remove('disabled-field');
+                arduinoPortInput.disabled = false;
+                arduinoPortInput.classList.remove('disabled-field');
             }
+        }
+        
+        // Add event listeners for the new universal controls
+        const colorSchemeSelect = document.getElementById('color-scheme');
+        const sensitivitySlider = document.getElementById('sensitivity-slider');
+        const sensitivityValue = document.getElementById('sensitivity-value');
+        const responseSpeedSlider = document.getElementById('response-speed-slider');
+        const responseSpeedValue = document.getElementById('response-speed-value');
+        const smoothingToggle = document.getElementById('smoothing-toggle');
+        
+        // Update values display and send changes to server
+        sensitivitySlider.addEventListener('input', function() {
+            sensitivityValue.textContent = `${this.value}%`;
+            if (isRunning) {
+                updateVisualizerParams();
+            }
+        });
+        
+        responseSpeedSlider.addEventListener('input', function() {
+            responseSpeedValue.textContent = `${this.value}%`;
+            if (isRunning) {
+                updateVisualizerParams();
+            }
+        });
+        
+        colorSchemeSelect.addEventListener('change', function() {
+            if (isRunning) {
+                updateVisualizerParams();
+            }
+        });
+        
+        smoothingToggle.addEventListener('change', function() {
+            if (isRunning) {
+                updateVisualizerParams();
+            }
+        });
+        
+        // Update all visualizer parameters
+        function updateVisualizerParams() {
+            socket.emit('update_visualizer_params', {
+                color_scheme: colorSchemeSelect.value,
+                sensitivity: sensitivitySlider.value / 100,
+                response_speed: responseSpeedSlider.value / 100,
+                smoothing_enabled: smoothingToggle.checked,
+                emphasis_enabled: emphasisToggle.checked,
+                emphasis_threshold: emphasisThreshold.value / 100,
+                emphasis_strength: emphasisStrength.value / 100
+            });
         }
     </script>
 </body>
