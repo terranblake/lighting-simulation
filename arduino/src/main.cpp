@@ -300,7 +300,8 @@ void processFrame(uint8_t numLeds) {
   // Print debug info every 30 frames
   if (DEBUG_MODE && (frameCount % 30 == 0)) {
     // Always send the FPS info - this is important for the Python client
-    char fpsbuffer[20];
+    // Following exact format expected by the Python client: "FPS: X.Y"
+    char fpsbuffer[16];
     int fps_int = (int)frameRate;
     int fps_dec = (int)((frameRate - fps_int) * 10);
     sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
@@ -418,7 +419,8 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   // Send debug info periodically
   if (DEBUG_MODE && (frameCount % 30 == 0)) {
     // Always send the FPS info - this is important for the Python client
-    char fpsbuffer[20];
+    // Following exact format expected by the Python client: "FPS: X.Y"
+    char fpsbuffer[16];
     int fps_int = (int)frameRate;
     int fps_dec = (int)((frameRate - fps_int) * 10);
     sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
