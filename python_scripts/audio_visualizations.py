@@ -842,6 +842,16 @@ class CenterGradientVisualizer(BaseVisualizer):
         self.transition_smoothing = 0.7
         # Minimum expansion (always shows a small central dot even with no audio)
         self.min_expansion = 0.05
+        
+        # Dynamic range adaptation
+        self.amplitude_history = []
+        self.history_max_size = 300  # Store last ~5 seconds at 60fps
+        self.adaptation_rate = 0.02  # How quickly to adapt to new levels (0-1)
+        self.amplitude_floor = 0.05  # Minimum amplitude threshold
+        self.amplitude_ceiling = 1.0  # Maximum amplitude threshold
+        self.dynamic_range = 0.7     # Amount of dynamic range scaling to apply (0-1)
+        self.response_curve = 2.0    # Exponential curve for response (higher = more contrast)
+        self.average_amplitude = 0.2 # Starting average estimate
     
     def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
         """Update visualization with expanding white pattern based on audio amplitude"""
@@ -885,9 +895,39 @@ class CenterGradientVisualizer(BaseVisualizer):
                          self.audio_energy * (1 - self.transition_smoothing))
         self.prev_energy = smoothed_energy
         
-        # Calculate expansion factor (0.0-1.0)
-        # This controls how far from center the colors expand
-        expansion = min(1.0, self.min_expansion + (smoothed_energy * sensitivity))
+        # Update amplitude history for dynamic range adaptation
+        self.amplitude_history.append(smoothed_energy)
+        if len(self.amplitude_history) > self.history_max_size:
+            self.amplitude_history.pop(0)  # Remove oldest value
+        
+        # Calculate dynamic average amplitude (with protection against empty list)
+        if self.amplitude_history:
+            # Calculate current average
+            current_avg = np.mean(self.amplitude_history)
+            # Update running average with adaptation rate
+            self.average_amplitude = (self.average_amplitude * (1 - self.adaptation_rate) + 
+                                    current_avg * self.adaptation_rate)
+        
+        # Apply adaptive scaling to current energy
+        if self.average_amplitude > 0:
+            # Calculate normalized energy relative to the average
+            # Use dynamic_range parameter to control how much adaptation affects the scaling
+            normalized_energy = smoothed_energy / (self.average_amplitude * 2)  # Scale factor of 2 helps ensure good dynamic range
+            
+            # Apply blending between raw and normalized energy based on dynamic_range parameter
+            adapted_energy = (smoothed_energy * (1 - self.dynamic_range) + 
+                           normalized_energy * self.dynamic_range)
+            
+            # Apply non-linear response curve for better visual contrast
+            # This makes quiet parts darker and loud parts brighter
+            curved_energy = min(1.0, pow(adapted_energy, 1.0 / self.response_curve))
+            
+            # Ensure that very quiet sounds still show minimal expansion
+            # by blending with minimum expansion threshold
+            expansion_factor = max(self.min_expansion, curved_energy)
+        else:
+            # Fallback if average is zero
+            expansion_factor = max(self.min_expansion, smoothed_energy)
         
         # Calculate the center point
         center = self.num_leds // 2
@@ -896,7 +936,7 @@ class CenterGradientVisualizer(BaseVisualizer):
         max_distance = self.num_leds // 2
         
         # Calculate expansion threshold in LED units
-        expansion_threshold = int(max_distance * expansion)
+        expansion_threshold = int(max_distance * expansion_factor)
         
         # Fill the LED strip with colors
         for i in range(self.num_leds):
@@ -912,9 +952,13 @@ class CenterGradientVisualizer(BaseVisualizer):
                 relative_pos = distance_from_center / max(1, expansion_threshold)
                 
                 # Calculate brightness based on position (center is brighter, edges are darker)
-                # and overall audio amplitude
+                # Use the original smoothed_energy for brightness to maintain dynamics
                 center_brightness = min(1.0, smoothed_energy * 1.2)  # Boost center brightness a bit
-                edge_brightness = center_brightness * (1.0 - relative_pos)  # Fade to edges
+                
+                # Make the gradient more pronounced by using non-linear falloff
+                # This creates more contrast between center and edges
+                edge_falloff = pow(relative_pos, 0.7)  # <1.0 for slower initial falloff
+                edge_brightness = center_brightness * (1.0 - edge_falloff)
                 
                 # Apply global brightness
                 value = min(1.0, edge_brightness * brightness)
@@ -945,6 +989,24 @@ class CenterGradientVisualizer(BaseVisualizer):
             try:
                 value = float(value)
                 self.energy_decay = max(0.5, min(0.95, value))
+            except ValueError:
+                pass
+        elif param == "dynamic_range":
+            try:
+                value = float(value)
+                self.dynamic_range = max(0.0, min(1.0, value))
+            except ValueError:
+                pass
+        elif param == "response_curve":
+            try:
+                value = float(value)
+                self.response_curve = max(0.5, min(5.0, value))
+            except ValueError:
+                pass
+        elif param == "adaptation_rate":
+            try:
+                value = float(value)
+                self.adaptation_rate = max(0.001, min(0.1, value))
             except ValueError:
                 pass
 
