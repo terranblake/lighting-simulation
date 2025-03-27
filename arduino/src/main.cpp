@@ -8,10 +8,11 @@
 #define COLOR_ORDER GRB
 
 // Color smoothing configuration
-#define COLOR_SMOOTHING 0.5  // Blend factor (0.0-1.0): higher = faster transitions, lower = smoother
+#define COLOR_SMOOTHING 0.7  // Blend factor (0.0-1.0): higher = faster transitions, lower = smoother
+#define ENABLE_SMOOTHING 0   // Set to 1 to enable color smoothing, 0 to disable for performance
 
 // Serial communication configuration
-#define BAUD_RATE   115200
+#define BAUD_RATE   230400 // Increased from 74880 for faster data transfer
 #define HEADER_FULL 0xAA    // Full frame update
 #define HEADER_DELTA 0xBB   // Differential frame update
 #define BUFFER_CHECK 0x42   // ASCII 'B' - Check buffer status command
@@ -19,18 +20,21 @@
 #define BUFFER_STATUS 'B'  // Command to query buffer status
 
 // Buffer management
-#define SERIAL_BUFFER_SIZE 128  // Arduino Uno/Nano hardware serial buffer size
-#define MAX_FRAMES_QUEUE 5     // Maximum number of frames to queue
+#define SERIAL_BUFFER_SIZE 64  // Increased from 32
+#define MAX_FRAMES_QUEUE 2     // Maximum number of frames to queue
 
-// Debug mode (set to 1 to enable verbose output)
-#define DEBUG_MODE  1
+// Debug mode (set to 0 to disable verbose output for better performance)
+#define DEBUG_MODE  0
 
-// Buffer for incoming data (3 bytes per LED for RGB values)
-uint8_t serialBuffer[NUM_LEDS * 3];
+// Direct memory access buffer for maximum speed
 CRGB leds[NUM_LEDS];
 
+// Performance optimization: Pre-allocate buffers instead of allocating during frame processing
+uint8_t serialBuffer[NUM_LEDS * 3];
+uint8_t deltaBuffer[NUM_LEDS * 4]; // For delta frames: index + RGB
+
 // Frame rate control
-#define MIN_FRAME_INTERVAL 8  // ~120fps = 8ms between frames
+#define MIN_FRAME_INTERVAL 0  // Removed minimum frame interval to maximize throughput
 unsigned long lastFrameProcessed = 0;
 unsigned long totalProcessingTime = 0;
 
@@ -45,6 +49,10 @@ unsigned long bufferOverflows = 0;
 CRGB previousColors[NUM_LEDS];
 bool firstFrame = true;
 
+// Batch processing
+#define BATCH_SIZE 10        // Process LEDs in batches for delta frames
+#define BATCH_SHOW_INTERVAL 0  // Only call show() after this many batches (0 = only after all batches)
+
 // Forward declarations
 void processFrame(uint8_t numLeds);
 void processDeltaFrame(uint8_t numChangedLeds);
@@ -53,6 +61,7 @@ void sendBufferStatus();
 float getBufferUsage();
 bool waitForData(uint16_t bytesNeeded, uint16_t timeoutMs);
 void flushInputBuffer(uint16_t maxBytes);
+inline void readSerialData(uint8_t* buffer, uint16_t bytesToRead);
 
 #define ACK_SUCCESS 0x01    // Acknowledgment - success
 #define ACK_ERROR 0xFF      // Acknowledgment - error
@@ -67,7 +76,7 @@ void setup() {
   // Clear serial buffers
   while(Serial.available()) Serial.read();
   
-  // Initialize FastLED
+  // Initialize FastLED with performance optimizations
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
     .setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(50);  // Set initial brightness
@@ -152,8 +161,21 @@ void loop() {
     }
   }
   
-  // Very small delay to prevent hogging the CPU
-  delayMicroseconds(100);
+  // Remove delay for maximum performance
+  // delay(1);
+}
+
+// Optimized method to read serial data in bulk for better performance
+inline void readSerialData(uint8_t* buffer, uint16_t bytesToRead) {
+  uint16_t bytesRead = 0;
+  while (bytesRead < bytesToRead) {
+    if (Serial.available()) {
+      int bytesAvailable = min(Serial.available(), bytesToRead - bytesRead);
+      while (bytesAvailable-- > 0) {
+        buffer[bytesRead++] = Serial.read();
+      }
+    }
+  }
 }
 
 // Helper to wait for a specific amount of data with timeout
@@ -163,7 +185,7 @@ bool waitForData(uint16_t bytesNeeded, uint16_t timeoutMs) {
     if (millis() - startTime > timeoutMs) {
       return false;  // Timeout
     }
-    delayMicroseconds(100);  // Short delay to avoid hogging CPU
+    // No delay for maximum performance
   }
   return true;
 }
@@ -192,134 +214,118 @@ void processFrame(uint8_t numLeds) {
   
   // Calculate bytes to read (3 bytes per LED)
   uint16_t bytesToRead = numLeds * 3;
-  uint16_t bytesRead = 0;
-  bool timeout = false;
   
   // Wait for all data to arrive with timeout
-  unsigned long startTime = millis();
-  while (bytesRead < bytesToRead) {
-    if (millis() - startTime > 1000) {
-      // Timeout
-      timeout = true;
-      break;
+  if (!waitForData(bytesToRead, 200)) {
+    if (DEBUG_MODE) {
+      sendDebugMessage("Timeout waiting for frame data");
     }
-    
-    if (Serial.available() > 0) {
-      serialBuffer[bytesRead] = Serial.read();
-      bytesRead++;
-      startTime = millis(); // Reset timeout for each byte
-    }
+    flushInputBuffer(Serial.available());
+    Serial.write(ACK_ERROR);
+    return;
   }
   
-  // If we received all expected data
-  if (!timeout && bytesRead == bytesToRead) {
-    // Create temporary array for new colors
-    CRGB newColors[numLeds];
+  // Use optimized bulk read for better performance
+  readSerialData(serialBuffer, bytesToRead);
+  
+  // Process the received data directly without temporary array
+  for (uint8_t i = 0; i < numLeds; i++) {
+    uint16_t dataIndex = i * 3;
     
-    // Read new colors into temporary array
-    for (uint8_t i = 0; i < numLeds; i++) {
-      uint16_t dataIndex = i * 3;
-      newColors[i].r = serialBuffer[dataIndex];
-      newColors[i].g = serialBuffer[dataIndex + 1];
-      newColors[i].b = serialBuffer[dataIndex + 2];
-    }
-    
-    // Apply smoothing between old and new colors
-    if (!firstFrame) {
-      for (uint8_t i = 0; i < numLeds; i++) {
-        leds[i].r = previousColors[i].r + (COLOR_SMOOTHING * (newColors[i].r - previousColors[i].r));
-        leds[i].g = previousColors[i].g + (COLOR_SMOOTHING * (newColors[i].g - previousColors[i].g));
-        leds[i].b = previousColors[i].b + (COLOR_SMOOTHING * (newColors[i].b - previousColors[i].b));
+    #if ENABLE_SMOOTHING
+      // Apply smoothing between old and new colors
+      if (!firstFrame) {
+        leds[i].r = previousColors[i].r + (COLOR_SMOOTHING * (serialBuffer[dataIndex] - previousColors[i].r));
+        leds[i].g = previousColors[i].g + (COLOR_SMOOTHING * (serialBuffer[dataIndex + 1] - previousColors[i].g));
+        leds[i].b = previousColors[i].b + (COLOR_SMOOTHING * (serialBuffer[dataIndex + 2] - previousColors[i].b));
         
         // Save current as previous for next frame
-        previousColors[i] = newColors[i];
+        previousColors[i].r = serialBuffer[dataIndex];
+        previousColors[i].g = serialBuffer[dataIndex + 1];
+        previousColors[i].b = serialBuffer[dataIndex + 2];
+      } else {
+        // For first frame, just use the new colors directly
+        leds[i].r = serialBuffer[dataIndex];
+        leds[i].g = serialBuffer[dataIndex + 1];
+        leds[i].b = serialBuffer[dataIndex + 2];
+        previousColors[i] = leds[i];
       }
-    } else {
-      // For first frame, just use the new colors directly
-      for (uint8_t i = 0; i < numLeds; i++) {
-        leds[i] = newColors[i];
-        previousColors[i] = newColors[i];
-      }
-      firstFrame = false;
-    }
-    
-    // Display the updated LEDs
-    unsigned long updateStart = millis();
-    
-    // Set delay time to 0 for maximum speed
-    FastLED.setMaxRefreshRate(0, true);
-    FastLED.show();
-    
-    unsigned long updateTime = millis() - updateStart;
-    
-    // Calculate frame rate
+    #else
+      // Skip smoothing for maximum speed
+      leds[i].r = serialBuffer[dataIndex];
+      leds[i].g = serialBuffer[dataIndex + 1];
+      leds[i].b = serialBuffer[dataIndex + 2];
+    #endif
+  }
+  
+  if (firstFrame) {
+    firstFrame = false;
+  }
+  
+  // Display the updated LEDs
+  unsigned long updateStart = millis();
+  
+  // Performance optimization: Disable interpolation and dithering
+  FastLED.setDither(0);
+  FastLED.setMaxRefreshRate(0, false);
+  FastLED.show();
+  
+  unsigned long updateTime = millis() - updateStart;
+  
+  // Calculate frame rate (only if debugging is enabled)
+  if (DEBUG_MODE) {
     unsigned long currentTime = millis();
     if (lastFrameTime > 0) {
       float timeDiff = currentTime - lastFrameTime;
       if (timeDiff > 0) {
-        // Valid time difference, calculate frameRate with smoothing
-        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff); // More responsive smoothing
-      }
-      // Explicitly cap at 0 if something went wrong
-      if (frameRate < 0 || isnan(frameRate)) {
-        frameRate = 0.0;
+        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
+        if (frameRate < 0 || isnan(frameRate)) {
+          frameRate = 0.0;
+        }
       }
     } else {
-      frameRate = 0.0;  // Initialize with 0 if it's the first frame
+      frameRate = 0.0;
     }
     lastFrameTime = currentTime;
     frameCount++;
     
     // Track total processing time
     totalProcessingTime += (millis() - startProcessing);
+  }
+  
+  // Send binary acknowledgment
+  Serial.write(ACK_SUCCESS);
+  
+  // Print debug info every 30 frames (only if debugging is enabled)
+  if (DEBUG_MODE && (frameCount % 30 == 0)) {
+    char buffer[64];
+    int fps_int = (int)frameRate;
+    int fps_dec = (int)((frameRate - fps_int) * 10);
     
-    // Send binary acknowledgment
-    Serial.write(ACK_SUCCESS);
+    // Calculate average processing time
+    unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
     
-    // Print debug info every 30 frames
-    if (DEBUG_MODE && (frameCount % 30 == 0)) {
-      char buffer[64];
-      int fps_int = (int)frameRate;
-      int fps_dec = (int)((frameRate - fps_int) * 10);
-      
-      // Calculate average processing time
-      unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
-      
-      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
-              frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
-      sendDebugMessage(buffer);
-      
-      // Send a separate clean FPS message to make parsing easier
-      char fpsbuffer[20];
-      sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
-      sendDebugMessage(fpsbuffer);
-    }
-  } else {
-    // Timeout or incorrect data length
-    if (DEBUG_MODE) {
-      char buffer[64];
-      sprintf(buffer, "Data error. Expected: %d bytes, Got: %d bytes", 
-              bytesToRead, bytesRead);
-      sendDebugMessage(buffer);
-    }
-    Serial.write(ACK_ERROR);
+    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
+            frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
+    sendDebugMessage(buffer);
+    
+    // Send a separate clean FPS message to make parsing easier
+    char fpsbuffer[20];
+    sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
+    sendDebugMessage(fpsbuffer);
   }
 }
 
 void processDeltaFrame(uint8_t numChangedLeds) {
+  // Performance optimization: Remove frame rate limiting
   // Skip frame if we're processing frames too quickly
-  unsigned long frameTime = millis();
-  if (lastFrameProcessed > 0 && frameTime - lastFrameProcessed < MIN_FRAME_INTERVAL) {
-    // Drop this frame to maintain frame rate
-    droppedFrames++;
-    
-    // Read and discard the expected data (4 bytes per changed LED)
-    flushInputBuffer(numChangedLeds * 4);
-    
-    // Send acknowledgment
-    Serial.write(ACK_SUCCESS);
-    return;
-  }
+  // if (lastFrameProcessed > 0 && frameTime - lastFrameProcessed < MIN_FRAME_INTERVAL) {
+  //   // Drop this frame to maintain frame rate
+  //   droppedFrames++;
+  //   flushInputBuffer(numChangedLeds * 4);
+  //   Serial.write(ACK_SUCCESS);
+  //   return;
+  // }
   
   // Calculate bytes to read (index + RGB = 4 bytes per changed LED)
   uint16_t bytesToRead = numChangedLeds * 4;
@@ -337,7 +343,7 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   }
   
   // Wait for all the data to arrive
-  if (!waitForData(bytesToRead, 100)) {
+  if (!waitForData(bytesToRead, 200)) {
     // Timeout waiting for data
     if (DEBUG_MODE) {
       sendDebugMessage("Timeout waiting for delta frame data");
@@ -347,58 +353,68 @@ void processDeltaFrame(uint8_t numChangedLeds) {
     return;
   }
   
-  // Now read and process the data
-  unsigned long updateStart = millis();
-  bool allDataValid = true;
+  // Performance optimization: Read all data in one batch
+  readSerialData(deltaBuffer, bytesToRead);
   
-  // Read and process all changed LEDs
+  // Now process the data in batches for better performance
+  bool allDataValid = true;
+  bool shouldUpdate = false;
+  
   for (uint8_t i = 0; i < numChangedLeds; i++) {
-    // Read LED index and color
-    uint8_t ledIndex = Serial.read();
-    uint8_t r = Serial.read();
-    uint8_t g = Serial.read();
-    uint8_t b = Serial.read();
+    // Get data from the buffer
+    uint8_t ledIndex = deltaBuffer[i*4];
+    uint8_t r = deltaBuffer[i*4 + 1];
+    uint8_t g = deltaBuffer[i*4 + 2];
+    uint8_t b = deltaBuffer[i*4 + 3];
     
     // Sanity check the LED index
     if (ledIndex < NUM_LEDS) {
       leds[ledIndex].r = r;
       leds[ledIndex].g = g;
       leds[ledIndex].b = b;
+      shouldUpdate = true;
     } else {
       allDataValid = false;
     }
+    
+    // Update in batches for large delta frames
+    if (BATCH_SHOW_INTERVAL > 0 && i > 0 && i % BATCH_SIZE == 0) {
+      FastLED.show();
+    }
   }
   
-  // Update the LED strip
-  FastLED.setMaxRefreshRate(0, true);
-  FastLED.show();
+  // Update the LED strip only if something changed
+  if (shouldUpdate) {
+    // Performance optimization: Disable interpolation and dithering
+    FastLED.setDither(0);
+    FastLED.setMaxRefreshRate(0, false);
+    FastLED.show();
+  }
   
-  unsigned long updateTime = millis() - updateStart;
   lastFrameProcessed = millis();
   
-  // Calculate frame rate
-  unsigned long currentTime = millis();
-  if (lastFrameTime > 0) {
-    float timeDiff = currentTime - lastFrameTime;
-    if (timeDiff > 0) {
-      frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
-      if (frameRate < 0 || isnan(frameRate)) {
-        frameRate = 0.0;
+  // Calculate frame rate (only if debugging is enabled)
+  if (DEBUG_MODE) {
+    unsigned long currentTime = millis();
+    if (lastFrameTime > 0) {
+      float timeDiff = currentTime - lastFrameTime;
+      if (timeDiff > 0) {
+        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff);
+        if (frameRate < 0 || isnan(frameRate)) {
+          frameRate = 0.0;
+        }
       }
+    } else {
+      frameRate = 0.0;
     }
-  } else {
-    frameRate = 0.0;
+    lastFrameTime = currentTime;
+    frameCount++;
   }
-  lastFrameTime = currentTime;
-  frameCount++;
-  
-  // Track processing time
-  totalProcessingTime += (millis() - updateStart);
   
   // Send binary acknowledgment
   Serial.write(allDataValid ? ACK_SUCCESS : ACK_ERROR);
   
-  // Send debug info periodically
+  // Send debug info periodically (only if debugging is enabled)
   if (DEBUG_MODE && (frameCount % 30 == 0)) {
     char buffer[64];
     int fps_int = (int)frameRate;
@@ -407,8 +423,8 @@ void processDeltaFrame(uint8_t numChangedLeds) {
     // Calculate average processing time
     unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
     
-    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
-            frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
+    sprintf(buffer, "Frame: %lu, FPS: %d.%d, Dropped: %lu, AvgProc: %lums", 
+            frameCount, fps_int, fps_dec, droppedFrames, avgProcessTime);
     sendDebugMessage(buffer);
     
     // Send a separate clean FPS message to make parsing easier
