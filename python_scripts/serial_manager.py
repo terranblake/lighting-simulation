@@ -9,7 +9,7 @@ import collections
 class SerialManager:
     """Manages serial communication with the Arduino controlling the LED strip."""
     
-    def __init__(self, port=None, baud_rate=115200, num_leds=60, mock_mode=False, debug_mode=False, max_fps=30):
+    def __init__(self, port=None, baud_rate=230400, num_leds=60, mock_mode=False, debug_mode=False, max_fps=30):
         self.port = port
         self.baud_rate = baud_rate
         self.num_leds = num_leds
@@ -39,8 +39,8 @@ class SerialManager:
         self.fps_step_up = 5  # How much to increase FPS by
         self.fps_step_down = 10  # How much to decrease FPS by
         self.min_target_fps = 10  # Don't go below this FPS
-        self.buffer_high_threshold = 0.7  # Buffer fullness threshold to decrease FPS
-        self.buffer_low_threshold = 0.3  # Buffer fullness threshold to increase FPS
+        self.buffer_high_threshold = 0.9  # Buffer fullness threshold to decrease FPS
+        self.buffer_low_threshold = 0.5  # Buffer fullness threshold to increase FPS
         self.ack_time_high_threshold = 0.02  # If ack time > 20ms, consider slowing down
         
         # Patterns to extract FPS from Arduino debug messages
@@ -57,7 +57,7 @@ class SerialManager:
         
         # Differential encoding
         self.previous_colors = [(0, 0, 0)] * num_leds
-        self.use_differential = False   # Temporarily disable differential encoding until issues are fixed
+        self.use_differential = True
         self.full_refresh_interval = 30  # Send full frame every N frames
         self.change_threshold = 3      # Minimum RGB difference to consider a change
         
@@ -166,27 +166,34 @@ class SerialManager:
                 # Parse FPS information from debug messages
                 if 'FPS:' in message:
                     try:
-                        # Log the raw message first for debugging
-                        logging.info(f"Arduino FPS message: '{message}'")
-                        
-                        # Try to use regex to extract FPS value for more reliable parsing
-                        match = self._arduino_fps_regex.search(message)
-                        if match:
-                            fps_str = match.group(1)
-                            # Check for invalid values
-                            if fps_str == '?' or fps_str == 'nan':
-                                logging.warning(f"Invalid FPS value in message: '{message}'")
-                            else:
+                        # Check for strict format match "FPS: X.Y" for more reliable parsing
+                        if message.startswith('FPS:'):
+                            # This is the dedicated FPS message format from Arduino
+                            try:
+                                fps_str = message.split('FPS:')[1].strip()
                                 self.arduino_fps = float(fps_str)
-                                logging.info(f"Parsed Arduino FPS: {self.arduino_fps}")
+                                logging.debug(f"Parsed Arduino FPS (direct): {self.arduino_fps}")
+                            except (ValueError, IndexError) as e:
+                                logging.warning(f"Failed to parse direct FPS message: '{message}' - {str(e)}")
                         else:
-                            # Fallback to splitting method if regex fails
-                            fps_part = message.split('FPS:')[1].split(',')[0].strip()
-                            if fps_part != '?' and fps_part != 'nan':
-                                self.arduino_fps = float(fps_part)
-                                logging.info(f"Parsed Arduino FPS (fallback): {self.arduino_fps}")
+                            # Try to use regex to extract FPS value for more reliable parsing
+                            match = self._arduino_fps_regex.search(message)
+                            if match:
+                                fps_str = match.group(1)
+                                # Check for invalid values
+                                if fps_str == '?' or fps_str == 'nan':
+                                    logging.warning(f"Invalid FPS value in message: '{message}'")
+                                else:
+                                    self.arduino_fps = float(fps_str)
+                                    logging.debug(f"Parsed Arduino FPS (regex): {self.arduino_fps}")
                             else:
-                                logging.warning(f"Invalid FPS value in message: '{message}'")
+                                # Fallback to splitting method if regex fails
+                                fps_part = message.split('FPS:')[1].split(',')[0].strip()
+                                if fps_part != '?' and fps_part != 'nan':
+                                    self.arduino_fps = float(fps_part)
+                                    logging.debug(f"Parsed Arduino FPS (fallback): {self.arduino_fps}")
+                                else:
+                                    logging.warning(f"Invalid FPS value in message: '{message}'")
                     except (ValueError, IndexError, AttributeError) as e:
                         logging.warning(f"Failed to parse FPS from message: '{message}' - {str(e)}")
                 

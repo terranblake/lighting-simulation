@@ -26,6 +26,7 @@
 // Debug mode (set to 1 to enable FPS reporting but optimize other debug code)
 #define DEBUG_MODE  1
 #define MINIMAL_DEBUG 1  // Set to 1 for minimal debug (only FPS reporting, no verbose messages)
+#define LOG_FPS_INTERVAL 30  // Send FPS info every N frames
 
 // Direct memory access buffer for maximum speed
 CRGB leds[NUM_LEDS];
@@ -58,6 +59,7 @@ bool firstFrame = true;
 void processFrame(uint8_t numLeds);
 void processDeltaFrame(uint8_t numChangedLeds);
 void sendDebugMessage(const char *message);
+void sendFpsReport(float fps);
 void sendBufferStatus();
 float getBufferUsage();
 bool waitForData(uint16_t bytesNeeded, uint16_t timeoutMs);
@@ -92,8 +94,7 @@ void setup() {
   }
   
   // Send ready signal using binary protocol
-  Serial.write(DEBUG_PRINT);
-  Serial.println("READY");
+  sendDebugMessage("READY");
   
   if (DEBUG_MODE) {
     sendDebugMessage("LED Animation Controller initialized");
@@ -297,14 +298,10 @@ void processFrame(uint8_t numLeds) {
   // Send binary acknowledgment
   Serial.write(ACK_SUCCESS);
   
-  // Print debug info every 30 frames
-  if (DEBUG_MODE && (frameCount % 30 == 0)) {
+  // Print debug info periodically
+  if (DEBUG_MODE && (frameCount % LOG_FPS_INTERVAL == 0)) {
     // Always send the FPS info - this is important for the Python client
-    char fpsbuffer[20];
-    int fps_int = (int)frameRate;
-    int fps_dec = (int)((frameRate - fps_int) * 10);
-    sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
-    sendDebugMessage(fpsbuffer);
+    sendFpsReport(frameRate);
     
     // Only send extended info if minimal debug is off
     if (!MINIMAL_DEBUG) {
@@ -313,7 +310,8 @@ void processFrame(uint8_t numLeds) {
       unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
       
       sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
-              frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
+              frameCount, (int)frameRate, (int)((frameRate - (int)frameRate) * 10), 
+              updateTime, droppedFrames, avgProcessTime);
       sendDebugMessage(buffer);
     }
   }
@@ -416,13 +414,9 @@ void processDeltaFrame(uint8_t numChangedLeds) {
   Serial.write(allDataValid ? ACK_SUCCESS : ACK_ERROR);
   
   // Send debug info periodically
-  if (DEBUG_MODE && (frameCount % 30 == 0)) {
+  if (DEBUG_MODE && (frameCount % LOG_FPS_INTERVAL == 0)) {
     // Always send the FPS info - this is important for the Python client
-    char fpsbuffer[20];
-    int fps_int = (int)frameRate;
-    int fps_dec = (int)((frameRate - fps_int) * 10);
-    sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
-    sendDebugMessage(fpsbuffer);
+    sendFpsReport(frameRate);
     
     // Only send extended info if minimal debug is off
     if (!MINIMAL_DEBUG) {
@@ -431,10 +425,21 @@ void processDeltaFrame(uint8_t numChangedLeds) {
       unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
       
       sprintf(buffer, "Frame: %lu, FPS: %d.%d, Dropped: %lu, AvgProc: %lums", 
-              frameCount, fps_int, fps_dec, droppedFrames, avgProcessTime);
+              frameCount, (int)frameRate, (int)((frameRate - (int)frameRate) * 10), 
+              droppedFrames, avgProcessTime);
       sendDebugMessage(buffer);
     }
   }
+}
+
+// Send FPS information in a standardized format for the Python client
+void sendFpsReport(float fps) {
+  int fps_int = (int)fps;
+  int fps_dec = (int)((fps - fps_int) * 10);
+  
+  char fpsbuffer[20];
+  sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
+  sendDebugMessage(fpsbuffer);
 }
 
 void sendDebugMessage(const char *message) {
