@@ -853,6 +853,12 @@ class CenterGradientVisualizer(BaseVisualizer):
         self.response_curve = 2.0    # Exponential curve for response (higher = more contrast)
         self.average_amplitude = 0.2 # Starting average estimate
         
+        # Amplitude emphasis parameters
+        self.emphasis_enabled = True    # Whether to enable dynamic emphasis
+        self.emphasis_threshold = 0.15  # Range around average where emphasis applies (±percentage)
+        self.emphasis_strength = 0.2    # How much to reduce brightness at average (0.0-1.0)
+        self.emphasis_curve = 4.0       # How quickly emphasis falls off (higher = faster)
+        
         # Cooling effect parameters
         self.use_color = True         # Whether to use colored cooling effect or stay white
         self.color_cooling = True     # Enable/disable cooling effect
@@ -958,6 +964,31 @@ class CenterGradientVisualizer(BaseVisualizer):
             # Fallback if average is zero
             expansion_factor = max(self.min_expansion, smoothed_energy)
         
+        # Calculate dynamic amplitude emphasis factor
+        emphasis_factor = 1.0  # Default to full brightness (no emphasis)
+        if self.emphasis_enabled and self.average_amplitude > 0.05:  # Only apply when we have sufficient audio data
+            # Calculate how close current amplitude is to the average (normalized 0.0-1.0)
+            # 0.0 = at exactly average, 1.0 = far from average
+            amplitude_diff = abs(smoothed_energy - self.average_amplitude) / max(0.05, self.average_amplitude)
+            
+            # Calculate the threshold band as a ratio
+            threshold_band = self.emphasis_threshold
+            
+            # If current amplitude is within threshold band around average, apply emphasis
+            if amplitude_diff < threshold_band:
+                # Calculate how close to center of band (0.0 = at average, 1.0 = at edge of band)
+                # This creates a bell curve where the center gets maximum emphasis
+                relative_position = amplitude_diff / threshold_band
+                
+                # Apply emphasis based on position within threshold band using a curve
+                # At exactly average, we apply maximum emphasis (reducing brightness)
+                # Near the edges of the band, emphasis decreases
+                band_position = pow(1.0 - relative_position, self.emphasis_curve)
+                
+                # Calculate emphasis factor (reduces brightness when close to average)
+                # 1.0 = no emphasis, down to (1.0 - emphasis_strength) at the center
+                emphasis_factor = 1.0 - (self.emphasis_strength * band_position)
+        
         # Update steady state detection (for cooling effect)
         self.steady_state_range.append(smoothed_energy)
         if len(self.steady_state_range) > self.range_history_size:
@@ -1040,8 +1071,8 @@ class CenterGradientVisualizer(BaseVisualizer):
                 edge_falloff = pow(relative_pos, 0.7)  # <1.0 for slower initial falloff
                 edge_brightness = center_brightness * (1.0 - edge_falloff)
                 
-                # Apply global brightness
-                value = min(1.0, edge_brightness * brightness)
+                # Apply dynamic amplitude emphasis, followed by global brightness
+                final_brightness = min(1.0, edge_brightness * emphasis_factor * brightness)
                 
                 # Calculate normalized distance for cooling effect (0.0-1.0)
                 # This is used to determine if a pixel is within the cooling radius
@@ -1067,11 +1098,11 @@ class CenterGradientVisualizer(BaseVisualizer):
                     effective_saturation = position_saturation * cooling_strength
                     
                     # Get the RGB color
-                    r, g, b = self._hsv_to_rgb(self.current_hue, effective_saturation, value)
+                    r, g, b = self._hsv_to_rgb(self.current_hue, effective_saturation, final_brightness)
                     self.led_colors[i] = (r, g, b)
                 else:
                     # Set white color with calculated brightness (original behavior)
-                    white_value = int(255 * value)
+                    white_value = int(255 * final_brightness)
                     self.led_colors[i] = (white_value, white_value, white_value)
         
         return self.get_colors()
@@ -1148,6 +1179,27 @@ class CenterGradientVisualizer(BaseVisualizer):
             try:
                 value = float(value)
                 self.cooling_radius_speed = max(0.001, min(0.1, value))
+            except ValueError:
+                pass
+        # New parameters for dynamic amplitude emphasis
+        elif param == "emphasis_enabled":
+            self.emphasis_enabled = bool(value)
+        elif param == "emphasis_threshold":
+            try:
+                value = float(value)
+                self.emphasis_threshold = max(0.01, min(0.5, value))
+            except ValueError:
+                pass
+        elif param == "emphasis_strength":
+            try:
+                value = float(value)
+                self.emphasis_strength = max(0.1, min(0.9, value))
+            except ValueError:
+                pass
+        elif param == "emphasis_curve":
+            try:
+                value = float(value)
+                self.emphasis_curve = max(0.5, min(5.0, value))
             except ValueError:
                 pass
 

@@ -101,10 +101,16 @@ def handle_start_visualization(data):
         device_name = data.get('device_name', 'Default Device')
         visualization_type = data.get('visualization_type', 'spectrum')
         arduino_port = data.get('arduino_port', '/dev/tty.usbserial-110')
-        max_fps = 240
+        max_fps = 480
         brightness = float(data.get('brightness', 1.0))
         
+        # Get amplitude emphasis parameters
+        emphasis_enabled = bool(data.get('emphasis_enabled', True))
+        emphasis_threshold = float(data.get('emphasis_threshold', 0.15))
+        emphasis_strength = float(data.get('emphasis_strength', 0.6))
+        
         logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}, brightness: {brightness:.2f}")
+        logger.info(f"Amplitude emphasis - Enabled: {emphasis_enabled}, Threshold: {emphasis_threshold:.2f}, Strength: {emphasis_strength:.2f}")
         
         # Mock Arduino if needed for testing
         mock_arduino = data.get('mock_arduino', False)
@@ -146,6 +152,12 @@ def handle_start_visualization(data):
         # Set initial brightness
         led_visualizer.set_param("brightness", brightness)
         
+        # Set initial amplitude emphasis parameters
+        if visualization_type == 'center_gradient':
+            led_visualizer.set_param("emphasis_enabled", emphasis_enabled)
+            led_visualizer.set_param("emphasis_threshold", emphasis_threshold)
+            led_visualizer.set_param("emphasis_strength", emphasis_strength)
+        
         # Start visualization thread
         visualizer_thread = threading.Thread(target=run_visualization)
         visualizer_thread.daemon = True
@@ -154,7 +166,10 @@ def handle_start_visualization(data):
         emit('visualization_started', {
             'visualization_type': visualization_type,
             'device': device_name,
-            'brightness': brightness
+            'brightness': brightness,
+            'emphasis_enabled': emphasis_enabled,
+            'emphasis_threshold': emphasis_threshold,
+            'emphasis_strength': emphasis_strength
         })
         
     except Exception as e:
@@ -181,7 +196,7 @@ def handle_update_fps_limit(data):
         return
     
     try:
-        max_fps = 120
+        max_fps = 480
         arduino.max_fps = max_fps
         # arduino.target_fps = min(arduino.target_fps, max_fps)
         arduino.target_fps = 120
@@ -215,6 +230,32 @@ def handle_update_brightness(data):
     except Exception as e:
         logger.error(f"Error updating brightness: {str(e)}")
         emit('error', {'message': f'Error updating brightness: {str(e)}'})
+
+@socketio.on('update_visualizer_params')
+def handle_update_visualizer_params(data):
+    """Handle updating specific parameters of the LED visualizer"""
+    global led_visualizer
+    
+    if not led_visualizer:
+        emit('error', {'message': 'No active visualizer'})
+        return
+    
+    try:
+        params_updated = []
+        
+        # Process each parameter if it exists in the data
+        for param, value in data.items():
+            if param in ["emphasis_enabled", "emphasis_threshold", "emphasis_strength", "emphasis_curve"]:
+                led_visualizer.set_param(param, value)
+                params_updated.append(param)
+                logger.info(f"Updated visualizer parameter {param} to {value}")
+        
+        if params_updated:
+            emit('visualizer_params_updated', {'updated_params': params_updated})
+        
+    except Exception as e:
+        logger.error(f"Error updating visualizer parameters: {str(e)}")
+        emit('error', {'message': f'Error updating visualizer parameters: {str(e)}'})
 
 def stop_visualization():
     """Stop the visualization thread and clean up resources"""

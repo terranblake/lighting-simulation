@@ -241,6 +241,31 @@
                 </div>
             </div>
             
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Amplitude Emphasis</label>
+                    <div class="slider-group">
+                        <input type="checkbox" id="emphasis-toggle" checked>
+                        <label for="emphasis-toggle" class="toggle-label">Enabled</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row" id="emphasis-controls">
+                <div class="form-group">
+                    <label>Threshold <span id="emphasis-threshold-value">15%</span></label>
+                    <div class="slider-group">
+                        <input type="range" id="emphasis-threshold" min="1" max="50" value="15" class="slider">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Strength <span id="emphasis-strength-value">60%</span></label>
+                    <div class="slider-group">
+                        <input type="range" id="emphasis-strength" min="10" max="90" value="60" class="slider">
+                    </div>
+                </div>
+            </div>
+            
             <div class="button-group">
                 <button id="btn-start" class="btn-start">Start Visualization</button>
                 <button id="btn-stop" class="btn-stop" disabled>Stop Visualization</button>
@@ -441,7 +466,10 @@
                 arduino_port: arduinoPort,
                 mock_arduino: mockArduino,
                 use_mock_audio: useMockAudio,
-                brightness: brightness // Add brightness parameter
+                brightness: brightness, // Add brightness parameter
+                emphasis_enabled: document.getElementById('emphasis-toggle').checked,
+                emphasis_threshold: document.getElementById('emphasis-threshold').value / 100,
+                emphasis_strength: document.getElementById('emphasis-strength').value / 100
             });
         }
         
@@ -547,6 +575,41 @@
                 socket.emit('update_brightness', { brightness: brightness });
             }
         });
+        
+        // Add event listeners for amplitude emphasis controls
+        const emphasisToggle = document.getElementById('emphasis-toggle');
+        const emphasisThreshold = document.getElementById('emphasis-threshold');
+        const emphasisStrength = document.getElementById('emphasis-strength');
+        const emphasisThresholdValue = document.getElementById('emphasis-threshold-value');
+        const emphasisStrengthValue = document.getElementById('emphasis-strength-value');
+        const emphasisControls = document.getElementById('emphasis-controls');
+        
+        // Update displayed values for emphasis controls
+        emphasisThreshold.addEventListener('input', function() {
+            emphasisThresholdValue.textContent = `${this.value}%`;
+            updateEmphasisParameters();
+        });
+        
+        emphasisStrength.addEventListener('input', function() {
+            emphasisStrengthValue.textContent = `${this.value}%`;
+            updateEmphasisParameters();
+        });
+        
+        emphasisToggle.addEventListener('change', function() {
+            emphasisControls.style.opacity = this.checked ? '1' : '0.5';
+            updateEmphasisParameters();
+        });
+        
+        // Function to update emphasis parameters
+        function updateEmphasisParameters() {
+            if (isRunning) {
+                socket.emit('update_visualizer_params', {
+                    emphasis_enabled: emphasisToggle.checked,
+                    emphasis_threshold: emphasisThreshold.value / 100, // Convert to 0-1 range
+                    emphasis_strength: emphasisStrength.value / 100, // Convert to 0-1 range
+                });
+            }
+        }
         
         // Event listeners
         startButton.addEventListener('click', startVisualization);
