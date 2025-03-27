@@ -282,7 +282,7 @@ def run_visualization():
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
-                    'beat': beat_detected,
+                    'beat': 1 if beat_detected else 0,
                     'fps': round(fps, 1),
                     'buffer': round(buffer_fullness * 100, 1)
                 })
