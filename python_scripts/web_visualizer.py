@@ -358,7 +358,7 @@ def main():
     
     print(f"Starting LED Web Visualizer server at http://0.0.0.0:{args.port}")
     print(f"Maximum FPS: {args.max_fps}")
-    print("Available visualization types: beat_pulse, spectrum, energy_beat")
+    print("Available visualization types: beat_pulse, spectrum, energy_beat, bass_impact")
     
     # Start the server
     socketio.run(app, host=args.host, port=args.port, debug=True, allow_unsafe_werkzeug=True)
