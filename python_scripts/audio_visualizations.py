@@ -828,7 +828,7 @@ class VUMeterVisualizer(BaseVisualizer):
 
 
 class CenterGradientVisualizer(BaseVisualizer):
-    """Visualizer that creates a gradient from center (black) to edges (white) with music-reactive color"""
+    """Visualizer that creates an expanding color pattern from center based on music energy"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
@@ -847,13 +847,17 @@ class CenterGradientVisualizer(BaseVisualizer):
         self.high_energy = 0.0
         # Decay rates for smoothing
         self.energy_decay = 0.8
-        # Previous frame intensity for smoothing
-        self.prev_intensity = [0.0] * num_leds
+        # Previous frame energy for smoothing
+        self.prev_energy = 0.0
         # Smoothing factor for changes between frames (0-1)
         self.transition_smoothing = 0.7
+        # Color spread rate - how much hue changes as it expands outward
+        self.color_spread_rate = 0.3
+        # Minimum expansion (always shows a small central dot even with no audio)
+        self.min_expansion = 0.05
     
     def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
-        """Update visualization based on audio with center-to-edge gradient"""
+        """Update visualization with expanding colors from center based on audio energy"""
         # Get parameters
         brightness = self.brightness
         sensitivity = self.sensitivity
@@ -892,50 +896,59 @@ class CenterGradientVisualizer(BaseVisualizer):
             # Use the fixed color
             self.current_hue = self.fixed_color_hue
         
-        # Calculate total energy for intensity
-        total_energy = self.bass_energy + self.mid_energy * 0.8 + self.high_energy * 0.6
-        energy_factor = min(1.0, total_energy)
+        # Calculate total energy for expansion
+        # Weight bass more heavily for expansion effect
+        total_energy = (self.bass_energy * 1.2) + (self.mid_energy * 0.8) + (self.high_energy * 0.6)
+        
+        # Apply smoothing to energy changes
+        smoothed_energy = (self.prev_energy * self.transition_smoothing + 
+                         total_energy * (1 - self.transition_smoothing))
+        self.prev_energy = smoothed_energy
+        
+        # Calculate expansion factor (0.0-1.0)
+        # This controls how far from center the colors expand
+        expansion = min(1.0, self.min_expansion + (smoothed_energy * sensitivity))
         
         # Calculate the center point
         center = self.num_leds // 2
         
-        # Create new color array
-        new_intensity = [0.0] * self.num_leds
+        # Max distance from center to edge
+        max_distance = self.num_leds // 2
         
-        # Generate the gradient from center to edges
-        for i in range(self.num_leds):
-            # Calculate distance from center (0.0 to 1.0)
-            distance = abs(i - center) / (self.num_leds // 2)
-            
-            # Apply energy modulation to the gradient
-            # Higher energy makes the gradient more pronounced
-            modulated_distance = distance * (0.5 + energy_factor * 0.5)
-            
-            # Store the new intensity value
-            new_intensity[i] = modulated_distance
+        # Calculate expansion threshold in LED units
+        expansion_threshold = int(max_distance * expansion)
         
-        # Apply smoothing transition from previous frame
+        # Fill the LED strip with colors
         for i in range(self.num_leds):
-            # Blend between previous and current intensity
-            intensity = (self.prev_intensity[i] * self.transition_smoothing + 
-                        new_intensity[i] * (1 - self.transition_smoothing))
+            # Calculate distance from center in LED units
+            distance_from_center = abs(i - center)
             
-            # Set the color based on the current hue and intensity
-            if intensity < 0.05:  # Very close to center is black
-                self.led_colors[i] = (0, 0, 0)
+            # If beyond the expansion threshold, set to black
+            if distance_from_center > expansion_threshold:
+                self.led_colors[i] = (0, 0, 0)  # Black
             else:
-                # Create gradient from pure color to white as we move outward
-                # Lower saturation = more white
-                saturation = max(0.0, 1.0 - intensity * 0.7)
+                # Calculate relative position within the expanded area (0.0-1.0)
+                # This creates a gradient from center to expansion threshold
+                relative_pos = distance_from_center / max(1, expansion_threshold)
                 
-                # Apply music energy to value (brightness)
-                value = min(1.0, intensity * (0.6 + energy_factor * 0.4) * brightness)
+                # Calculate color shift based on distance from center
+                # This makes the color change as it expands outward
+                hue_shift = (relative_pos * self.color_spread_rate) % 1.0
+                current_hue = (self.current_hue + hue_shift) % 1.0
                 
-                # Get RGB color
-                self.led_colors[i] = self._hsv_to_rgb(self.current_hue, saturation, value)
-        
-        # Store current intensities for next frame
-        self.prev_intensity = new_intensity
+                # Calculate saturation and value
+                # Full saturation at center, decreasing toward edges
+                saturation = 1.0 - (relative_pos * 0.3)
+                
+                # Brightness peaks at mid-distance, lower at center and edges
+                # This creates a ring-like effect
+                # Adjust curve_factor to change the visual effect
+                curve_factor = 4.0
+                value_curve = 1.0 - pow(relative_pos * 2.0 - 1.0, 2) * curve_factor
+                value = min(1.0, max(0.3, value_curve) * brightness)
+                
+                # Set the LED color
+                self.led_colors[i] = self._hsv_to_rgb(current_hue, saturation, value)
         
         return self.get_colors()
     
@@ -967,6 +980,18 @@ class CenterGradientVisualizer(BaseVisualizer):
             try:
                 value = float(value)
                 self.fixed_color_hue = max(0.0, min(1.0, value))
+            except ValueError:
+                pass
+        elif param == "color_spread_rate":
+            try:
+                value = float(value)
+                self.color_spread_rate = max(0.0, min(1.0, value))
+            except ValueError:
+                pass
+        elif param == "min_expansion":
+            try:
+                value = float(value)
+                self.min_expansion = max(0.0, min(0.5, value))
             except ValueError:
                 pass
         elif param == "color":
