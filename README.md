@@ -1,17 +1,18 @@
 # LED Animation System
 
-A system for controlling RGB LED strips using Python and Arduino via serial communication.
+A system for controlling RGB LED strips using Python and Arduino via serial communication, with advanced audio visualization capabilities.
 
 ## Overview
 
-This project allows you to generate LED animations in Python and send them to an Arduino that controls an RGB LED strip using the FastLED library. It now also supports audio visualization features to react to music or sound.
+This project allows you to generate LED animations in Python and send them to an Arduino that controls an RGB LED strip using the FastLED library. It includes sophisticated audio visualization features that react to music or sound in real-time, with support for frequency analysis, beat detection, and dynamic visual effects.
 
 ## Components
 
 - **Python Animation Generator**: Creates RGB animations and sends them over serial
 - **Arduino Controller**: Receives animation data and controls the LED strip
-- **Communication Protocol**: Simple serial protocol for transferring RGB values
+- **Communication Protocol**: Optimized binary protocol for transferring RGB values
 - **Audio Visualization**: Captures system audio and generates visualizations on the LED strip
+- **Web Interface**: Real-time control and preview of visualizations
 
 ## Hardware Requirements
 
@@ -69,50 +70,50 @@ This project allows you to generate LED animations in Python and send them to an
    - Create a Multi-Output Device that includes both your speakers and BlackHole
    - Set the Multi-Output Device as your output device
 
-## Available Animations
+## Available Visualizations
 
-- **Rainbow**: Colorful rainbow pattern that moves along the strip
-- **Color Wipe**: Single colored dot that moves back and forth
-- **Pulse**: Entire strip pulsing with changing colors
+1. **Spectrum** - Displays the frequency spectrum across the LED strip
+2. **Beat Pulse** - Pulses the entire strip on detected beats
+3. **Energy Beat** - Creates flowing patterns based on audio energy and beats
+4. **Bass Impact** - Emphasizes bass frequencies with powerful visual impact
+5. **Frequency Bars** - Divides the LED strip into frequency bands
+6. **VU Meter** - Mimics a volume unit meter with color gradients
+7. **Center Gradient** - Creates an expanding pattern from center with dynamic effects:
+   - Amplitude-driven expansion
+   - Dynamic range adaptation
+   - Color cooling effect during steady audio
+   - Frequency-selective emphasis
+   - Auto-calibration to most prominent frequency band
 
-## Audio Visualization
+## Web Interface
 
-The project now includes an audio visualization system that can capture system audio and visualize it on the LED strip. This feature requires additional software to be installed:
-
-1. **BlackHole Audio Driver** - For capturing system audio on macOS. You can install it with Homebrew:
-   ```
-   brew install --cask blackhole-2ch
-   ```
-   After installation, you'll need to configure a Multi-Output Device in macOS Sound settings to route audio to both your speakers and BlackHole.
-
-2. **Python Dependencies** - Additional Python packages are required:
-   ```
-   pip install -r requirements.txt
-   ```
-
-### Using the Audio Visualizer
+The project includes a web interface for real-time control and preview:
 
 1. Start the web interface:
    ```
    python python_scripts/web_visualizer.py
    ```
 
-2. Open a web browser and go to http://localhost:5000
+2. Open a web browser and go to http://localhost:5050
 
-3. Select visualization options:
-   - Choose an audio device (BlackHole 2ch for system audio)
-   - Select a visualization type (Spectrum, Beat Pulse, or Energy Beat)
-   - Enter the Arduino port
-   - Use "Mock Arduino" option if no hardware is connected
-   - Use "Synthetic audio" option to test without audio input
+3. Control options:
+   - Select audio device (BlackHole 2ch for system audio)
+   - Choose visualization type
+   - Adjust brightness
+   - Configure amplitude emphasis
+   - Enable/disable frequency-selective mode
+   - Monitor performance metrics (FPS, buffer usage)
 
-4. Click "Start Visualization" to begin
+## Performance Optimizations
 
-### Available Visualizations
+The system includes several optimizations for high performance:
 
-1. **Spectrum** - Displays the frequency spectrum across the LED strip
-2. **Beat Pulse** - Pulses the entire strip on detected beats
-3. **Energy Beat** - Creates flowing patterns based on audio energy and beats
+- Serial communication at 921600 baud rate
+- Optimized binary protocol for LED updates
+- Efficient buffer management
+- Frame rate limiting and monitoring
+- Dynamic range adaptation
+- Frequency-selective processing
 
 ## Hardware Testing
 
@@ -143,10 +144,12 @@ To add a new audio visualization, edit `python_scripts/audio_visualizations.py`:
 
 ## Protocol
 
-The communication protocol uses a simple binary format:
+The communication protocol uses an optimized binary format:
 - Header: 0xAA (1 byte)
 - Number of LEDs to update (1 byte)
 - RGB values (3 bytes per LED)
+- Support for partial frame updates
+- Delta frame compression for efficiency
 
 ## License
 
