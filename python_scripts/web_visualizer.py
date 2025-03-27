@@ -102,8 +102,9 @@ def handle_start_visualization(data):
         visualization_type = data.get('visualization_type', 'spectrum')
         arduino_port = data.get('arduino_port', '/dev/tty.usbserial-110')
         max_fps = 240
+        brightness = float(data.get('brightness', 1.0))
         
-        logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}")
+        logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}, brightness: {brightness:.2f}")
         
         # Mock Arduino if needed for testing
         mock_arduino = data.get('mock_arduino', False)
@@ -142,6 +143,9 @@ def handle_start_visualization(data):
         # Initialize LED visualizer
         led_visualizer = create_visualizer(visualization_type)
         
+        # Set initial brightness
+        led_visualizer.set_param("brightness", brightness)
+        
         # Start visualization thread
         visualizer_thread = threading.Thread(target=run_visualization)
         visualizer_thread.daemon = True
@@ -149,7 +153,8 @@ def handle_start_visualization(data):
         
         emit('visualization_started', {
             'visualization_type': visualization_type,
-            'device': device_name
+            'device': device_name,
+            'brightness': brightness
         })
         
     except Exception as e:
@@ -187,6 +192,29 @@ def handle_update_fps_limit(data):
     except Exception as e:
         logger.error(f"Error updating FPS limit: {str(e)}")
         emit('error', {'message': f'Error updating FPS limit: {str(e)}'})
+
+@socketio.on('update_brightness')
+def handle_update_brightness(data):
+    """Handle updating the brightness of the LED visualizer"""
+    global led_visualizer
+    
+    if not led_visualizer:
+        emit('error', {'message': 'No active visualizer'})
+        return
+    
+    try:
+        brightness = float(data.get('brightness', 1.0))
+        # Ensure brightness is between 0.0 and 1.0
+        brightness = max(0.0, min(1.0, brightness))
+        
+        # Update visualizer brightness
+        led_visualizer.set_param("brightness", brightness)
+        
+        logger.info(f"Updated brightness to {brightness:.2f}")
+        emit('brightness_updated', {'brightness': brightness})
+    except Exception as e:
+        logger.error(f"Error updating brightness: {str(e)}")
+        emit('error', {'message': f'Error updating brightness: {str(e)}'})
 
 def stop_visualization():
     """Stop the visualization thread and clean up resources"""

@@ -223,6 +223,15 @@
             </div>
             
             <div class="form-group">
+                <label for="brightness-slider">Brightness</label>
+                <div style="display: flex; align-items: center;">
+                    <input type="range" id="brightness-slider" min="0" max="100" value="100" 
+                           style="flex-grow: 1; margin-right: 10px;">
+                    <span id="brightness-value">100%</span>
+                </div>
+            </div>
+            
+            <div class="form-group">
                 <label for="arduino-port">Arduino Port</label>
                 <input type="text" id="arduino-port" value="/dev/tty.usbserial-110">
 
@@ -261,6 +270,8 @@
         // Elements
         const audioDeviceSelect = document.getElementById('audio-device');
         const visualizationTypeSelect = document.getElementById('visualization-type');
+        const brightnessSlider = document.getElementById('brightness-slider');
+        const brightnessValue = document.getElementById('brightness-value');
         const arduinoPortInput = document.getElementById('arduino-port');
         const startButton = document.getElementById('btn-start');
         const stopButton = document.getElementById('btn-stop');
@@ -273,6 +284,7 @@
         let socket;
         let isRunning = false;
         const numLeds = 60;
+        let currentBrightness = 100; // Store current brightness value
         
         // Create LED elements
         function initializeLEDs() {
@@ -413,6 +425,7 @@
             const arduinoPort = arduinoPortInput.value;
             const mockArduino = document.getElementById('mock-arduino').checked;
             const useMockAudio = document.getElementById('use-mock-audio').checked;
+            const brightness = brightnessSlider.value / 100; // Convert to 0-1 range
             
             if (!deviceId && !useMockAudio) {
                 showAlert('Please select an audio device or use synthetic audio', 'error');
@@ -427,7 +440,8 @@
                 visualization_type: visualizationType,
                 arduino_port: arduinoPort,
                 mock_arduino: mockArduino,
-                use_mock_audio: useMockAudio
+                use_mock_audio: useMockAudio,
+                brightness: brightness // Add brightness parameter
             });
         }
         
@@ -489,6 +503,7 @@
             audioDeviceSelect.disabled = isRunning;
             visualizationTypeSelect.disabled = isRunning;
             arduinoPortInput.disabled = isRunning;
+            // Don't disable brightness slider - it should be adjustable while running
         }
         
         // Show alert message
@@ -518,6 +533,20 @@
         function setStatus(status) {
             statusText.textContent = status;
         }
+        
+        // Add event listener for brightness slider
+        brightnessSlider.addEventListener('input', function() {
+            // Update displayed value
+            brightnessValue.textContent = `${this.value}%`;
+            // Store current value
+            currentBrightness = parseInt(this.value);
+            
+            // If visualization is running, send updated brightness
+            if (isRunning) {
+                const brightness = currentBrightness / 100; // Convert to 0-1 range
+                socket.emit('update_brightness', { brightness: brightness });
+            }
+        });
         
         // Event listeners
         startButton.addEventListener('click', startVisualization);
