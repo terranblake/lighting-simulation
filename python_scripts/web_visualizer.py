@@ -305,6 +305,7 @@ def run_visualization():
                     buffer_fullness = arduino.buffer_fullness
                     target_fps = arduino.target_fps
                     arduino_fps = arduino.arduino_fps
+                    logger.debug(f"Arduino metrics - Buffer: {buffer_fullness*100:.1f}%, Target FPS: {target_fps}, Arduino FPS: {arduino_fps}")
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,

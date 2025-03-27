@@ -148,7 +148,9 @@ class SerialManager:
                         # Extract FPS value - typical format: "Frame: 123, FPS: 45.6, ..."
                         fps_part = message.split('FPS:')[1].split(',')[0].strip()
                         self.arduino_fps = float(fps_part)
-                    except (ValueError, IndexError):
+                        logging.debug(f"Parsed Arduino FPS: {self.arduino_fps}")
+                    except (ValueError, IndexError) as e:
+                        logging.debug(f"Failed to parse FPS from message: '{message}' - {str(e)}")
                         pass  # Failed to parse FPS, ignore
                 
                 if self.debug_mode:
