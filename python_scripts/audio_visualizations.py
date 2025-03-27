@@ -7,9 +7,6 @@ import time
 import math
 import numpy as np
 from typing import List, Dict, Tuple, Union, Any, Optional
-import random
-import colorsys
-from collections import deque
 
 # LED strip constants
 NUM_LEDS = 60
@@ -87,7 +84,7 @@ class BaseVisualizer:
             int(b1 * (1 - factor) + b2 * factor)
         )
     
-    def hsv_to_rgb(self, h, s, v):
+    def _hsv_to_rgb(self, h, s, v):
         """Convert HSV (hue, saturation, value) to RGB color
         
         h: 0.0-1.0 (hue)
@@ -187,7 +184,7 @@ class BeatPulseVisualizer(BaseVisualizer):
         else:
             # Use regular pulse color
             if self.color_mode == 'dynamic':
-                color = self.hsv_to_rgb(self.hue, 1.0, brightness)
+                color = self._hsv_to_rgb(self.hue, 1.0, brightness)
             else:
                 # Use fixed color from the cycle
                 color_idx = int(time.time() / 2) % len(self.colors)
@@ -259,7 +256,7 @@ class SpectrumVisualizer(BaseVisualizer):
             val = value * brightness  # Brightness based on audio level
             
             # Convert HSV to RGB - ensure all three RGB values are populated
-            r, g, b = self.hsv_to_rgb(hue, sat, val)
+            r, g, b = self._hsv_to_rgb(hue, sat, val)
             self.led_colors[i] = (r, g, b)
         
         return self.get_colors()
@@ -353,7 +350,7 @@ class EnergyBeatVisualizer(BaseVisualizer):
             
             # Apply color
             intensity = min(1.0, intensity) * brightness
-            self.led_colors[i] = self.hsv_to_rgb(hue, 1.0, intensity)
+            self.led_colors[i] = self._hsv_to_rgb(hue, 1.0, intensity)
         
         return self.get_colors()
 
@@ -367,7 +364,12 @@ class BassImpactVisualizer(BaseVisualizer):
         self.bass_energy = 0.0
         self.bass_decay = 0.8
         self.bass_peak = 0.0
-        self.peak_decay = 0.95
+        self.peak_decay = 0.985  # Slower peak decay for better dynamic range
+        
+        # Dynamic range control
+        self.min_threshold = 0.15  # Minimum threshold to avoid complete darkness
+        self.dynamic_range = 0.85  # Maximum range between min and max response
+        self.response_curve = 1.5  # Non-linear response curve (higher = more exponential)
         
         # Mid/high tracking for contrast
         self.mid_energy = 0.0
@@ -414,22 +416,31 @@ class BassImpactVisualizer(BaseVisualizer):
             self.mid_energy = max(current_mid, self.mid_energy * self.mid_decay)
             self.high_energy = max(current_high, self.high_energy * self.high_decay)
             
-            # Track peak bass for normalization
+            # Track peak bass for normalization (with a minimum floor to prevent division by zero)
+            floor_value = 0.01  # Minimum floor value
             if self.bass_energy > self.bass_peak:
-                self.bass_peak = self.bass_energy
+                self.bass_peak = max(self.bass_energy, floor_value)
             else:
-                self.bass_peak = self.bass_peak * self.peak_decay + self.bass_energy * (1 - self.peak_decay)
+                self.bass_peak = max(self.bass_peak * self.peak_decay + self.bass_energy * (1 - self.peak_decay), floor_value)
         else:
             # Decay if no data
             self.bass_energy *= self.bass_decay
             self.mid_energy *= self.mid_decay
             self.high_energy *= self.high_decay
         
-        # Normalize bass energy (0.0-1.0)
+        # Apply dynamic range and response curve for better bass expressiveness
         if self.bass_peak > 0:
-            normalized_bass = min(1.0, self.bass_energy / self.bass_peak)
+            # Initial normalization
+            raw_normalized = min(1.0, self.bass_energy / self.bass_peak)
+            
+            # Apply response curve (power function) for non-linear response
+            # This makes small changes more visible while preventing constant peaking
+            curved_response = pow(raw_normalized, 1.0 / self.response_curve)
+            
+            # Apply dynamic range adjustment
+            normalized_bass = self.min_threshold + (curved_response * self.dynamic_range)
         else:
-            normalized_bass = 0
+            normalized_bass = self.min_threshold
         
         # Generate a center-out propagation wave on strong bass or beats
         if beat_detected and self.beat_cooldown <= 0:
@@ -513,12 +524,16 @@ class BassImpactVisualizer(BaseVisualizer):
             pos = (i - center_start) / center_range
             
             # Create pulse effect at center that responds to bass
-            pulse_intensity = normalized_bass * (1.0 - abs(pos - 0.5) * 2)
+            pulse_factor = 1.0 - abs(pos - 0.5) * 2  # Center position factor (1.0 at center, 0.0 at edges)
             
-            # Create color based on bass intensity
+            # Use normalized_bass to dynamically adjust the pulse intensity
+            pulse_intensity = normalized_bass * pulse_factor
+            
+            # Create color based on frequency balance - boost mid and high colors
+            # to maintain color balance even at lower bass levels
             r = int(self.bass_color[0] * pulse_intensity)
-            g = int(self.mid_color[1] * self.mid_energy / max(1.0, self.bass_peak) * pulse_intensity)
-            b = int(self.high_color[2] * self.high_energy / max(1.0, self.bass_peak) * pulse_intensity)
+            g = int(self.mid_color[1] * self.mid_energy / max(self.bass_peak * 0.5, 0.01) * pulse_intensity)
+            b = int(self.high_color[2] * self.high_energy / max(self.bass_peak * 0.5, 0.01) * pulse_intensity)
             
             # Add to existing color
             new_r = min(255, new_colors[i][0] + r)
@@ -642,7 +657,7 @@ class FrequencyBarsVisualizer(BaseVisualizer):
             if self.use_rainbow:
                 # Use rainbow coloring (hue based on band index)
                 hue = i / self.num_bands
-                color = self.hsv_to_rgb(hue, 1.0, self.brightness)
+                color = self._hsv_to_rgb(hue, 1.0, self.brightness)
             else:
                 # Use predefined colors
                 if i < len(self.band_colors):
@@ -812,74 +827,6 @@ class VUMeterVisualizer(BaseVisualizer):
                 pass
 
 
-# Add new class for performance benchmarking visualization
-class PerfBenchmarkVisualizer(BaseVisualizer):
-    """Performance benchmark visualization that clearly shows accuracy and frame rate"""
-    
-    def __init__(self, num_leds=60):
-        super().__init__(num_leds)
-        self.tick_position = 0
-        self.tick_color = (255, 255, 255)  # White tick mark
-        self.start_time = time.time()
-        self.frame_counter = 0
-        self.expected_frame_counter = 0
-        self.expected_fps = 120  # Target FPS
-        self.last_reset = time.time()
-        self.background_hue = 0.0
-    
-    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None):
-        # Increment frame counter
-        self.frame_counter += 1
-        
-        # Calculate expected frames based on elapsed time and target FPS
-        current_time = time.time()
-        elapsed = current_time - self.start_time
-        self.expected_frame_counter = int(elapsed * self.expected_fps)
-        
-        # Every second, update metrics and reset counters if needed
-        if current_time - self.last_reset >= 1.0:
-            frame_diff = abs(self.frame_counter - self.expected_frame_counter)
-            self.accuracy = 100 - min(100, (frame_diff / self.expected_fps) * 100)
-            self.last_reset = current_time
-        
-        # Clear all LEDs
-        self.led_colors = [(0, 0, 0)] * self.num_leds
-        
-        # Create a moving tick mark that should move at exactly 1 position per frame at 60fps
-        # This will visually show if we're dropping frames (it would move inconsistently)
-        self.tick_position = (self.tick_position + 1) % self.num_leds
-        self.led_colors[self.tick_position] = self.tick_color
-        
-        # Create visual indicator of frame accuracy (color-coded background)
-        # Blue = Perfect performance, Green = Good, Yellow = Fair, Red = Poor
-        self.background_hue = (self.background_hue + 0.01) % 1.0
-        background_color = self.hsv_to_rgb(self.background_hue, 1.0, 0.2)  # Low brightness background
-        
-        # Fill in background on the LEDs that aren't the tick mark
-        for i in range(self.num_leds):
-            if i != self.tick_position:
-                self.led_colors[i] = background_color
-                
-        # Create pattern that would reveal timing issues
-        # Every 15 frames, add a bright flash that should be perfectly synchronized
-        if self.frame_counter % 15 == 0:
-            marker_position = (self.tick_position + self.num_leds // 2) % self.num_leds
-            self.led_colors[marker_position] = (255, 255, 0)  # Yellow marker
-            
-        # Add position markers at regular intervals
-        for i in range(0, self.num_leds, 10):
-            if i != self.tick_position:
-                # Gradual color change based on position
-                position_hue = i / self.num_leds
-                position_color = self.hsv_to_rgb(position_hue, 1.0, 0.5)
-                self.led_colors[i] = position_color
-    
-    def hsv_to_rgb(self, h, s, v):
-        """Convert HSV color to RGB"""
-        r, g, b = colorsys.hsv_to_rgb(h, s, v)
-        return (int(r * 255), int(g * 255), int(b * 255))
-
-
 # Register available visualizations
 VISUALIZATIONS = {
     'beat_pulse': BeatPulseVisualizer,
@@ -888,7 +835,6 @@ VISUALIZATIONS = {
     'bass_impact': BassImpactVisualizer,
     'frequency_bars': FrequencyBarsVisualizer,
     'vu_meter': VUMeterVisualizer,
-    'perf_benchmark': PerfBenchmarkVisualizer,
 }
 
 def create_visualizer(vis_type: str, num_leds: int = NUM_LEDS) -> BaseVisualizer:
@@ -907,8 +853,6 @@ def create_visualizer(vis_type: str, num_leds: int = NUM_LEDS) -> BaseVisualizer
         return FrequencyBarsVisualizer(num_leds)
     elif vis_type == "vu_meter":
         return VUMeterVisualizer(num_leds)
-    elif vis_type == "perf_benchmark":
-        return PerfBenchmarkVisualizer(num_leds)
     else:
         # Default to spectrum visualizer
         return SpectrumVisualizer(num_leds)
