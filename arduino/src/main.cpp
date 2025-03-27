@@ -219,13 +219,15 @@ void processFrame(uint8_t numLeds) {
     // Print debug info every 30 frames
     if (DEBUG_MODE && (frameCount % 30 == 0)) {
       char buffer[64];
-      sprintf(buffer, "Frame: %lu, FPS: %.1f, Update: %lums, Dropped: %lu", 
-              frameCount, frameRate, updateTime, droppedFrames);
+      int fps_int = (int)frameRate;
+      int fps_dec = (int)((frameRate - fps_int) * 10);
+      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu", 
+              frameCount, fps_int, fps_dec, updateTime, droppedFrames);
       sendDebugMessage(buffer);
       
       // Send a separate clean FPS message to make parsing easier
       char fpsbuffer[20];
-      sprintf(fpsbuffer, "FPS: %.1f", frameRate);
+      sprintf(fpsbuffer, "FPS: %d.%d", fps_int, fps_dec);
       sendDebugMessage(fpsbuffer);
     }
   } else {
@@ -261,5 +263,8 @@ void sendBufferStatus() {
 
 float getBufferUsage() {
   // Calculate buffer usage as a ratio (0.0 to 1.0)
-  return constrain((float)Serial.available() / SERIAL_BUFFER_SIZE, 0.0, 1.0);
+  float usage = (float)Serial.available() / SERIAL_BUFFER_SIZE;
+  if (usage < 0.0) return 0.0;
+  if (usage > 1.0) return 1.0;
+  return usage;
 } 

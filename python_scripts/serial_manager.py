@@ -4,25 +4,27 @@ import struct
 import threading
 import logging
 import re
+import collections
 
 class SerialManager:
     """Manages serial communication with the Arduino controlling the LED strip."""
     
-    def __init__(self, port=None, baud_rate=115200, num_leds=60, max_fps=60, auto_reconnect=True):
+    def __init__(self, port=None, baud_rate=115200, num_leds=60, mock_mode=False, debug_mode=False, max_fps=30):
         self.port = port
         self.baud_rate = baud_rate
         self.num_leds = num_leds
+        self.mock_mode = mock_mode
+        self.debug_mode = debug_mode
         self.serial_connection = None
-        self.auto_reconnect = auto_reconnect
+        self.auto_reconnect = True
         self.connected = False
         self.lock = threading.Lock()
         self.last_frame_time = 0
         self.frame_count = 0
-        self.debug_mode = True
         self.max_fps = max_fps
         self.target_fps = max_fps  # Dynamic target FPS that adjusts based on performance
         self.min_frame_time = 1.0 / max_fps if max_fps > 0 else 0
-        self.debug_messages = []
+        self.debug_messages = collections.deque(maxlen=100)
         self.buffer_check_interval = 0.5  # Check buffer status more frequently
         self.last_buffer_check = 0
         self.buffer_fullness = 0.0  # 0.0 to 1.0
@@ -41,8 +43,17 @@ class SerialManager:
         self.buffer_low_threshold = 0.3  # Buffer fullness threshold to increase FPS
         self.ack_time_high_threshold = 0.02  # If ack time > 20ms, consider slowing down
         
-        # Arduino fps tracking
-        self._arduino_fps_regex = re.compile(r'FPS:\s*([\d.]+)')  # Pattern to extract FPS from messages
+        # Patterns to extract FPS from Arduino debug messages
+        # Will match both 'FPS: 12.3' and 'Frame: 123, FPS: 12.3, Update: 5ms, Dropped: 10'
+        self._arduino_fps_regex = re.compile(r'FPS: (\d+\.\d+|\d+)')
+        
+        # Initialize thread for buffer status checking
+        self.buffer_check_thread = None
+        self.buffer_check_active = False
+        
+        # Track acknowledgment times
+        self.last_ack_time = 0
+        self.current_ack_time = 0
         
     def connect(self, port=None):
         """Connect to the Arduino via the specified serial port."""
@@ -339,7 +350,7 @@ class SerialManager:
     
     def get_debug_messages(self, clear=True):
         """Get and optionally clear debug messages from the Arduino."""
-        messages = self.debug_messages.copy()
+        messages = list(self.debug_messages)
         if clear:
             self.debug_messages.clear()
         return messages 
