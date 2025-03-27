@@ -101,7 +101,7 @@ def handle_start_visualization(data):
         device_name = data.get('device_name', 'Default Device')
         visualization_type = data.get('visualization_type', 'spectrum')
         arduino_port = data.get('arduino_port', '/dev/tty.usbserial-110')
-        max_fps = 120
+        max_fps = 240
         
         logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}")
         
@@ -336,7 +336,8 @@ def run_visualization():
                     'target_fps': round(target_fps, 1),
                     'arduino_fps': round(arduino_fps, 1),
                     'sent_fps': round(sent_fps, 1),
-                    'buffer': round(buffer_fullness * 100, 1)
+                    'buffer': round(buffer_fullness * 100, 1),
+                    'accuracy': round(100 * arduino_fps / target_fps, 1) if target_fps > 0 and visualization_type == 'perf_benchmark' else None
                 })
                 last_update_time = now
                 frame_count = 0

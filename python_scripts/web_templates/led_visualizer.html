@@ -218,6 +218,7 @@
                     <option value="bass_impact">Bass Impact</option>
                     <option value="frequency_bars">Frequency Bars</option>
                     <option value="vu_meter">VU Meter</option>
+                    <option value="perf_benchmark">Performance Benchmark</option>
                 </select>
             </div>
             
@@ -351,6 +352,35 @@
                 arduinoFpsElement.textContent = `Arduino: ${data.arduino_fps}`;
                 
                 document.getElementById('buffer').textContent = `Buffer: ${data.buffer}%`;
+                
+                // Show additional performance metrics if we're in performance benchmark visualization
+                if (visualizationTypeSelect.value === 'perf_benchmark' && data.hasOwnProperty('accuracy')) {
+                    // Update accuracy display if available
+                    if (!document.getElementById('accuracy-metric')) {
+                        // Create accuracy display if it doesn't exist
+                        const metricsContainer = document.querySelector('.metrics-container');
+                        const accuracyElement = document.createElement('div');
+                        accuracyElement.id = 'accuracy-metric';
+                        accuracyElement.className = 'metric';
+                        metricsContainer.appendChild(accuracyElement);
+                    }
+                    
+                    const accuracyElement = document.getElementById('accuracy-metric');
+                    accuracyElement.textContent = `Accuracy: ${data.accuracy.toFixed(1)}%`;
+                    
+                    // Add color coding based on accuracy
+                    accuracyElement.classList.remove('metric-good', 'metric-warning', 'metric-poor');
+                    if (data.accuracy >= 95) {
+                        accuracyElement.classList.add('metric-good');
+                    } else if (data.accuracy >= 80) {
+                        accuracyElement.classList.add('metric-warning');
+                    } else {
+                        accuracyElement.classList.add('metric-poor');
+                    }
+                } else if (document.getElementById('accuracy-metric')) {
+                    // Remove accuracy display if we're not in performance benchmark mode
+                    document.getElementById('accuracy-metric').remove();
+                }
             });
             
             socket.on('disconnect', () => {
