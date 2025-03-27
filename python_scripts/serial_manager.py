@@ -155,13 +155,21 @@ class SerialManager:
                         # Try to use regex to extract FPS value for more reliable parsing
                         match = self._arduino_fps_regex.search(message)
                         if match:
-                            self.arduino_fps = float(match.group(1))
-                            logging.info(f"Parsed Arduino FPS: {self.arduino_fps}")
+                            fps_str = match.group(1)
+                            # Check for invalid values
+                            if fps_str == '?' or fps_str == 'nan':
+                                logging.warning(f"Invalid FPS value in message: '{message}'")
+                            else:
+                                self.arduino_fps = float(fps_str)
+                                logging.info(f"Parsed Arduino FPS: {self.arduino_fps}")
                         else:
                             # Fallback to splitting method if regex fails
                             fps_part = message.split('FPS:')[1].split(',')[0].strip()
-                            self.arduino_fps = float(fps_part)
-                            logging.info(f"Parsed Arduino FPS (fallback): {self.arduino_fps}")
+                            if fps_part != '?' and fps_part != 'nan':
+                                self.arduino_fps = float(fps_part)
+                                logging.info(f"Parsed Arduino FPS (fallback): {self.arduino_fps}")
+                            else:
+                                logging.warning(f"Invalid FPS value in message: '{message}'")
                     except (ValueError, IndexError, AttributeError) as e:
                         logging.warning(f"Failed to parse FPS from message: '{message}' - {str(e)}")
                 

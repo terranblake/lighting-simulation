@@ -199,6 +199,8 @@ void processFrame(uint8_t numLeds) {
     unsigned long currentTime = millis();
     if (lastFrameTime > 0) {
       frameRate = 0.9 * frameRate + 0.1 * (1000.0 / (currentTime - lastFrameTime));
+    } else {
+      frameRate = 0.0;  // Initialize with 0 if it's the first frame
     }
     lastFrameTime = currentTime;
     frameCount++;
