@@ -134,6 +134,12 @@
             font-size: 14px;
         }
         
+        .metric-highlight {
+            background-color: #bb86fc;
+            color: #000;
+            font-weight: bold;
+        }
+        
         .pulsing {
             animation: pulse 0.5s ease-in-out;
         }
@@ -238,7 +244,7 @@
                 <div class="status-metrics">
                     <span id="fps" class="metric">0 FPS</span>
                     <span id="target-fps" class="metric">Target: 0</span>
-                    <span id="arduino-fps" class="metric">Arduino: 0</span>
+                    <span id="arduino-fps" class="metric metric-highlight">Arduino: 0</span>
                     <span id="buffer" class="metric">Buffer: 0%</span>
                 </div>
             </div>
@@ -325,9 +331,19 @@
                         ledStrip.classList.remove('pulsing');
                     }, 100);
                 }
+                
+                // Update metrics
                 fpsText.textContent = `${data.fps} FPS`;
                 document.getElementById('target-fps').textContent = `Target: ${data.target_fps}`;
-                document.getElementById('arduino-fps').textContent = `Arduino: ${data.arduino_fps}`;
+                
+                // Highlight Arduino FPS when it changes from 0
+                const arduinoFpsElement = document.getElementById('arduino-fps');
+                if (data.arduino_fps > 0 && arduinoFpsElement.textContent === 'Arduino: 0') {
+                    arduinoFpsElement.classList.add('metric-highlight');
+                    setTimeout(() => arduinoFpsElement.classList.remove('metric-highlight'), 3000);
+                }
+                arduinoFpsElement.textContent = `Arduino: ${data.arduino_fps}`;
+                
                 document.getElementById('buffer').textContent = `Buffer: ${data.buffer}%`;
             });
             
