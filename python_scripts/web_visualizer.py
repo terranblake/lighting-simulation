@@ -101,8 +101,9 @@ def handle_start_visualization(data):
         device_name = data.get('device_name', 'Default Device')
         visualization_type = data.get('visualization_type', 'spectrum')
         arduino_port = data.get('arduino_port', '/dev/tty.usbserial-110')
+        max_fps = int(data.get('max_fps', 60))  # Allow client to specify max FPS
         
-        logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id})")
+        logger.info(f"Starting visualization: {visualization_type} on device {device_name} ({device_id}), max FPS: {max_fps}")
         
         # Mock Arduino if needed for testing
         mock_arduino = data.get('mock_arduino', False)
@@ -110,8 +111,8 @@ def handle_start_visualization(data):
             logger.info("Using mock Arduino mode")
             arduino = None
         else:
-            # Initialize Arduino connection
-            arduino = SerialManager(port=arduino_port)
+            # Initialize Arduino connection with specified max FPS
+            arduino = SerialManager(port=arduino_port, max_fps=max_fps)
             arduino_connected = arduino.connect()
             
             if not arduino_connected:
@@ -164,6 +165,27 @@ def handle_stop_visualization(data=None):
         emit('visualization_stopped', {})
     else:
         emit('error', {'message': 'Failed to stop visualization'})
+
+@socketio.on('update_fps_limit')
+def handle_update_fps_limit(data):
+    """Handle updating the maximum FPS limit"""
+    global arduino
+    
+    if not arduino:
+        emit('error', {'message': 'No active Arduino connection'})
+        return
+    
+    try:
+        max_fps = int(data.get('max_fps', 60))
+        arduino.max_fps = max_fps
+        arduino.target_fps = min(arduino.target_fps, max_fps)
+        arduino.min_frame_time = 1.0 / arduino.target_fps if arduino.target_fps > 0 else 0
+        
+        logger.info(f"Updated max FPS limit to {max_fps}")
+        emit('fps_limit_updated', {'max_fps': max_fps, 'target_fps': arduino.target_fps})
+    except Exception as e:
+        logger.error(f"Error updating FPS limit: {str(e)}")
+        emit('error', {'message': f'Error updating FPS limit: {str(e)}'})
 
 def stop_visualization():
     """Stop the visualization thread and clean up resources"""
@@ -277,13 +299,16 @@ def run_visualization():
                     client_colors = led_colors[:60*3]
                 
                 buffer_fullness = 0
+                target_fps = 0
                 if arduino:
                     buffer_fullness = arduino.buffer_fullness
+                    target_fps = arduino.target_fps
                 
                 socketio.emit('visualization_data', {
                     'led_colors': client_colors,
                     'beat': 1 if beat_detected else 0,
                     'fps': round(fps, 1),
+                    'target_fps': round(target_fps, 1),
                     'buffer': round(buffer_fullness * 100, 1)
                 })
                 last_update_time = now
@@ -307,6 +332,8 @@ def main():
                         help='Port to run the server on')
     parser.add_argument('--list-devices', action='store_true',
                         help='List available audio devices and exit')
+    parser.add_argument('--max-fps', type=int, default=60,
+                        help='Maximum frames per second to send to Arduino (default: 60)')
     
     args = parser.parse_args()
     
@@ -321,11 +348,12 @@ def main():
                 print(f"  Output channels: {device['max_output_channels']}")
         return
     
-    print("Starting LED Web Visualizer server at http://0.0.0.0:5050")
+    print(f"Starting LED Web Visualizer server at http://0.0.0.0:{args.port}")
+    print(f"Maximum FPS: {args.max_fps}")
     print("Available visualization types: beat_pulse, spectrum, energy_beat")
     
     # Start the server
-    socketio.run(app, host='0.0.0.0', port=5050, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=args.host, port=args.port, debug=True, allow_unsafe_werkzeug=True)
 
 if __name__ == '__main__':
     main() 
