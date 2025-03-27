@@ -7,6 +7,9 @@
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
 
+// Color smoothing configuration
+#define COLOR_SMOOTHING 0.5  // Blend factor (0.0-1.0): higher = faster transitions, lower = smoother
+
 // Serial communication configuration
 #define BAUD_RATE   115200
 #define HEADER_MARKER 0xAA
@@ -27,8 +30,9 @@ uint8_t serialBuffer[NUM_LEDS * 3];
 CRGB leds[NUM_LEDS];
 
 // Frame rate control
-#define MIN_FRAME_INTERVAL 33  // 30fps = ~33ms between frames
+#define MIN_FRAME_INTERVAL 8  // ~120fps = 8ms between frames
 unsigned long lastFrameProcessed = 0;
+unsigned long totalProcessingTime = 0;
 
 // Statistics
 unsigned long frameCount = 0;
@@ -36,6 +40,10 @@ unsigned long lastFrameTime = 0;
 float frameRate = 0;
 unsigned long droppedFrames = 0;
 unsigned long bufferOverflows = 0;
+
+// Previous color values for smoothing
+CRGB previousColors[NUM_LEDS];
+bool firstFrame = true;
 
 // Forward declarations
 void processFrame(uint8_t numLeds);
@@ -61,6 +69,11 @@ void setup() {
   // Set all LEDs to off at startup
   FastLED.clear();
   FastLED.show();
+  
+  // Initialize smoothing arrays
+  for (int i = 0; i < NUM_LEDS; i++) {
+    previousColors[i] = CRGB::Black;
+  }
   
   // Send ready signal using binary protocol
   Serial.write(DEBUG_PRINT);
@@ -149,6 +162,8 @@ void loop() {
 }
 
 void processFrame(uint8_t numLeds) {
+  unsigned long startProcessing = millis();
+  
   if (numLeds == 0 || numLeds > NUM_LEDS) {
     if (DEBUG_MODE) {
       char buffer[32];
@@ -182,17 +197,43 @@ void processFrame(uint8_t numLeds) {
   
   // If we received all expected data
   if (!timeout && bytesRead == bytesToRead) {
-    // Update LED values
+    // Create temporary array for new colors
+    CRGB newColors[numLeds];
+    
+    // Read new colors into temporary array
     for (uint8_t i = 0; i < numLeds; i++) {
       uint16_t dataIndex = i * 3;
-      leds[i].r = serialBuffer[dataIndex];
-      leds[i].g = serialBuffer[dataIndex + 1];
-      leds[i].b = serialBuffer[dataIndex + 2];
+      newColors[i].r = serialBuffer[dataIndex];
+      newColors[i].g = serialBuffer[dataIndex + 1];
+      newColors[i].b = serialBuffer[dataIndex + 2];
+    }
+    
+    // Apply smoothing between old and new colors
+    if (!firstFrame) {
+      for (uint8_t i = 0; i < numLeds; i++) {
+        leds[i].r = previousColors[i].r + (COLOR_SMOOTHING * (newColors[i].r - previousColors[i].r));
+        leds[i].g = previousColors[i].g + (COLOR_SMOOTHING * (newColors[i].g - previousColors[i].g));
+        leds[i].b = previousColors[i].b + (COLOR_SMOOTHING * (newColors[i].b - previousColors[i].b));
+        
+        // Save current as previous for next frame
+        previousColors[i] = newColors[i];
+      }
+    } else {
+      // For first frame, just use the new colors directly
+      for (uint8_t i = 0; i < numLeds; i++) {
+        leds[i] = newColors[i];
+        previousColors[i] = newColors[i];
+      }
+      firstFrame = false;
     }
     
     // Display the updated LEDs
     unsigned long updateStart = millis();
+    
+    // Set delay time to 0 for maximum speed
+    FastLED.setMaxRefreshRate(0, true);
     FastLED.show();
+    
     unsigned long updateTime = millis() - updateStart;
     
     // Calculate frame rate
@@ -201,7 +242,7 @@ void processFrame(uint8_t numLeds) {
       float timeDiff = currentTime - lastFrameTime;
       if (timeDiff > 0) {
         // Valid time difference, calculate frameRate with smoothing
-        frameRate = 0.9 * frameRate + 0.1 * (1000.0 / timeDiff);
+        frameRate = 0.7 * frameRate + 0.3 * (1000.0 / timeDiff); // More responsive smoothing
       }
       // Explicitly cap at 0 if something went wrong
       if (frameRate < 0 || isnan(frameRate)) {
@@ -213,6 +254,9 @@ void processFrame(uint8_t numLeds) {
     lastFrameTime = currentTime;
     frameCount++;
     
+    // Track total processing time
+    totalProcessingTime += (millis() - startProcessing);
+    
     // Send binary acknowledgment
     Serial.write(ACK_SUCCESS);
     
@@ -221,8 +265,12 @@ void processFrame(uint8_t numLeds) {
       char buffer[64];
       int fps_int = (int)frameRate;
       int fps_dec = (int)((frameRate - fps_int) * 10);
-      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu", 
-              frameCount, fps_int, fps_dec, updateTime, droppedFrames);
+      
+      // Calculate average processing time
+      unsigned long avgProcessTime = totalProcessingTime / (frameCount > 0 ? frameCount : 1);
+      
+      sprintf(buffer, "Frame: %lu, FPS: %d.%d, Update: %lums, Dropped: %lu, AvgProc: %lums", 
+              frameCount, fps_int, fps_dec, updateTime, droppedFrames, avgProcessTime);
       sendDebugMessage(buffer);
       
       // Send a separate clean FPS message to make parsing easier
