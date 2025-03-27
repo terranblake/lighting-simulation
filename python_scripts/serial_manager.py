@@ -7,7 +7,7 @@ import logging
 class SerialManager:
     """Manages serial communication with the Arduino controlling the LED strip."""
     
-    def __init__(self, port=None, baud_rate=115200, num_leds=60, max_fps=30, auto_reconnect=True):
+    def __init__(self, port=None, baud_rate=115200, num_leds=60, max_fps=60, auto_reconnect=True):
         self.port = port
         self.baud_rate = baud_rate
         self.num_leds = num_leds
@@ -19,12 +19,25 @@ class SerialManager:
         self.frame_count = 0
         self.debug_mode = True
         self.max_fps = max_fps
+        self.target_fps = max_fps  # Dynamic target FPS that adjusts based on performance
         self.min_frame_time = 1.0 / max_fps if max_fps > 0 else 0
         self.debug_messages = []
-        self.buffer_check_interval = 1.0  # Check buffer status every 1 second
+        self.buffer_check_interval = 0.5  # Check buffer status more frequently
         self.last_buffer_check = 0
         self.buffer_fullness = 0.0  # 0.0 to 1.0
         self.dropped_frames = 0
+        
+        # Dynamic FPS control parameters
+        self.ack_times = []  # Track recent acknowledgment times
+        self.max_ack_samples = 10  # Number of samples to keep for averaging
+        self.last_adjustment_time = 0
+        self.adjustment_interval = 0.5  # How often to adjust FPS (seconds)
+        self.fps_step_up = 5  # How much to increase FPS by
+        self.fps_step_down = 10  # How much to decrease FPS by
+        self.min_target_fps = 10  # Don't go below this FPS
+        self.buffer_high_threshold = 0.7  # Buffer fullness threshold to decrease FPS
+        self.buffer_low_threshold = 0.3  # Buffer fullness threshold to increase FPS
+        self.ack_time_high_threshold = 0.02  # If ack time > 20ms, consider slowing down
         
     def connect(self, port=None):
         """Connect to the Arduino via the specified serial port."""
@@ -148,6 +161,47 @@ class SerialManager:
         except Exception as e:
             logging.error(f"Error processing incoming data: {str(e)}")
     
+    def adjust_fps(self, ack_time):
+        """
+        Dynamically adjust the target FPS based on acknowledgment time and buffer fullness.
+        
+        Args:
+            ack_time: Time taken to get acknowledgment from Arduino (seconds)
+        """
+        # Add the latest acknowledgment time to our samples
+        self.ack_times.append(ack_time)
+        # Keep only the most recent samples
+        self.ack_times = self.ack_times[-self.max_ack_samples:]
+        
+        # Only adjust periodically to give time for changes to stabilize
+        current_time = time.time()
+        if current_time - self.last_adjustment_time < self.adjustment_interval:
+            return
+            
+        self.last_adjustment_time = current_time
+        
+        # Calculate average acknowledgment time
+        avg_ack_time = sum(self.ack_times) / len(self.ack_times) if self.ack_times else 0
+        
+        # Log current status
+        logging.debug(f"FPS Control: Current target FPS: {self.target_fps}, Buffer: {self.buffer_fullness * 100:.1f}%, Avg ack time: {avg_ack_time * 1000:.1f}ms")
+        
+        # Decision logic for FPS adjustment
+        if self.buffer_fullness > self.buffer_high_threshold or avg_ack_time > self.ack_time_high_threshold:
+            # Buffer is getting full or Arduino is taking too long to respond - slow down
+            new_target = max(self.target_fps - self.fps_step_down, self.min_target_fps)
+            if new_target < self.target_fps:
+                self.target_fps = new_target
+                self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
+                logging.info(f"FPS Control: Decreasing target FPS to {self.target_fps} (buffer: {self.buffer_fullness * 100:.1f}%, ack: {avg_ack_time * 1000:.1f}ms)")
+        elif self.buffer_fullness < self.buffer_low_threshold and avg_ack_time < self.ack_time_high_threshold / 2:
+            # Buffer has room and Arduino is responding quickly - speed up
+            new_target = min(self.target_fps + self.fps_step_up, self.max_fps)
+            if new_target > self.target_fps:
+                self.target_fps = new_target
+                self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
+                logging.info(f"FPS Control: Increasing target FPS to {self.target_fps} (buffer: {self.buffer_fullness * 100:.1f}%, ack: {avg_ack_time * 1000:.1f}ms)")
+    
     def send_data(self, led_colors, force=False):
         """
         Send LED color data to the Arduino.
@@ -165,14 +219,13 @@ class SerialManager:
         current_time = time.time()
         elapsed = current_time - self.last_frame_time
         
-        # Check buffer status periodically to avoid overwhelming Arduino
+        # Check buffer status more frequently
         if current_time - self.last_buffer_check > self.buffer_check_interval:
             self.check_buffer_status()
             self.last_buffer_check = current_time
             
-            if self.buffer_fullness > 0.7:  # Buffer is getting full
-                logging.warning(f"Arduino buffer is at {self.buffer_fullness * 100:.1f}% - slowing down")
-                # Skip this frame
+            if self.buffer_fullness > 0.9:  # Critical buffer level
+                logging.warning(f"Arduino buffer critical at {self.buffer_fullness * 100:.1f}% - dropping frame")
                 self.dropped_frames += 1
                 return False
         
@@ -205,32 +258,45 @@ class SerialManager:
                     data.extend([r, g, b])
                 
                 # Send the entire frame in one write operation
+                ack_start_time = time.time()
                 self.serial_connection.write(data)
                 self.serial_connection.flush()
                 
                 # Process any incoming acknowledgments with timeout
-                start_time = time.time()
+                ack_received = False
                 
-                while time.time() - start_time < 0.1:  # 100ms timeout
+                while time.time() - ack_start_time < 0.1:  # 100ms timeout
                     self.process_incoming_data()
                     
                     # If we've processed all pending data, we're done
                     if not self.serial_connection.in_waiting:
+                        ack_received = True
                         break
                     
                     time.sleep(0.001)  # Small sleep to avoid busy waiting
+                
+                # Calculate acknowledgment time
+                ack_time = time.time() - ack_start_time
+                
+                # Adjust FPS based on acknowledgment time and buffer status
+                if ack_received:
+                    self.adjust_fps(ack_time)
                 
                 self.frame_count += 1
                 self.last_frame_time = current_time
                 
                 if self.frame_count % 100 == 0:
-                    fps = 1.0 / (elapsed if elapsed > 0 else 0.001)
-                    logging.debug(f"Sent frame {self.frame_count}, FPS: {fps:.1f}, Buffer: {self.buffer_fullness * 100:.1f}%")
+                    actual_fps = 1.0 / (elapsed if elapsed > 0 else 0.001)
+                    logging.info(f"Sent frame {self.frame_count}, Actual FPS: {actual_fps:.1f}, Target FPS: {self.target_fps}, Ack time: {ack_time*1000:.1f}ms, Buffer: {self.buffer_fullness*100:.1f}%")
                 
                 return True
                 
             except Exception as e:
                 logging.error(f"Error sending data to Arduino: {str(e)}")
+                # Decrease target FPS after an error
+                self.target_fps = max(self.target_fps - self.fps_step_down, self.min_target_fps)
+                self.min_frame_time = 1.0 / self.target_fps if self.target_fps > 0 else 0
+                logging.info(f"Error encountered - decreasing target FPS to {self.target_fps}")
                 return False
     
     def clear_leds(self):
