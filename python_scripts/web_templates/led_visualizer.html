@@ -267,15 +267,6 @@
                 </select>
             </div>
             
-            <div class="form-group">
-                <label for="brightness-slider">Brightness</label>
-                <div style="display: flex; align-items: center;">
-                    <input type="range" id="brightness-slider" min="0" max="100" value="100" 
-                           style="flex-grow: 1; margin-right: 10px;">
-                    <span id="brightness-value">100%</span>
-                </div>
-            </div>
-            
             <div class="config-drawer-container">
                 <button class="config-drawer-toggle" id="devices-drawer-toggle">
                     Devices <span id="devices-drawer-icon">▼</span>
@@ -310,6 +301,15 @@
                     Configuration <span id="config-drawer-icon">▼</span>
                 </button>
                 <div class="config-drawer" id="config-drawer">
+                    <div class="form-group">
+                        <label for="brightness-slider">Brightness</label>
+                        <div style="display: flex; align-items: center;">
+                            <input type="range" id="brightness-slider" min="0" max="100" value="100" 
+                                   style="flex-grow: 1; margin-right: 10px;">
+                            <span id="brightness-value">100%</span>
+                        </div>
+                    </div>
+                    
                     <div class="form-row">
                         <div class="form-group">
                             <label>Amplitude Emphasis</label>
