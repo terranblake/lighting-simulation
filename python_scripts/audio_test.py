@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Audio Visualization Test
-Test script that creates synthetic audio data to test visualizations
-without requiring an actual audio device.
+Audio Test Module
+Provides synthetic audio data for testing visualizations without a real audio source
 """
 import sys
 import time
@@ -21,60 +20,90 @@ except ImportError:
 
 
 class MockAudioGenerator:
-    """Generate synthetic audio data for testing visualizations"""
+    """Generates synthetic audio data for testing audio visualizations"""
     
-    def __init__(self, sample_rate=44100, buffer_size=1024):
-        """Initialize the mock audio generator"""
+    def __init__(self, sample_rate=48000, buffer_size=1024, channels=1):
+        """Initialize with audio settings"""
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
-        self.time_index = 0
-        self.beat_interval = 0.5  # beat every 0.5 seconds
-        self.last_beat_time = 0
+        self.channels = channels
         
-    def generate_sine_wave(self, frequency, amplitude=0.5):
-        """Generate a sine wave of the given frequency"""
-        t = np.arange(self.time_index, 
-                      self.time_index + self.buffer_size) / self.sample_rate
-        return amplitude * np.sin(2 * np.pi * frequency * t)
-    
+        # Settings for generated audio
+        self.base_freq = 440.0  # Base frequency in Hz
+        self.beat_interval = 0.5  # Beat every 0.5 seconds
+        self.freq_shift = 0.0  # Current frequency shift
+        self.last_beat_time = 0.0
+        
+        # Frequency components for generated waveform
+        self.freq_components = [
+            (1.0, 0.7),     # Base frequency, amplitude
+            (2.0, 0.3),     # 1st harmonic
+            (3.0, 0.15),    # 2nd harmonic
+            (0.5, 0.2),     # Subharmonic
+        ]
+        
+        # Time tracking
+        self.time_offset = 0.0
+        
     def generate_audio_data(self):
-        """Generate synthetic audio data"""
-        # Base frequencies for testing
-        bass_freq = 80
-        mid_freq = 440
-        high_freq = 2000
+        """Generate synthetic audio data with various frequency components"""
+        # Create time array
+        t = np.linspace(
+            self.time_offset, 
+            self.time_offset + self.buffer_size / self.sample_rate, 
+            self.buffer_size
+        )
         
-        # Time for this buffer
-        current_time = self.time_index / self.sample_rate
+        # Update time offset for next call
+        self.time_offset += self.buffer_size / self.sample_rate
         
-        # Generate individual components
-        bass = self.generate_sine_wave(bass_freq, 0.7)
-        mid = self.generate_sine_wave(mid_freq, 0.5)
-        high = self.generate_sine_wave(high_freq, 0.3)
+        # Check if it's time for a beat
+        current_time = time.time()
+        is_beat = (current_time - self.last_beat_time) >= self.beat_interval
+        if is_beat:
+            self.last_beat_time = current_time
+            # Shift frequency on beat
+            self.freq_shift = (self.freq_shift + 50) % 200 - 100
+        
+        # Generate waveform with multiple frequency components
+        audio = np.zeros(self.buffer_size)
+        
+        # Add sine waves of different frequencies
+        for freq_multiple, amplitude in self.freq_components:
+            freq = self.base_freq * freq_multiple + self.freq_shift
+            audio += amplitude * np.sin(2 * np.pi * freq * t)
         
         # Add some noise
-        noise = np.random.normal(0, 0.05, self.buffer_size)
+        noise_level = 0.05
+        audio += noise_level * np.random.randn(self.buffer_size)
         
-        # Create beat effect
-        beat_amplitude = 0
-        if current_time - self.last_beat_time >= self.beat_interval:
-            beat_amplitude = 0.8
-            self.last_beat_time = current_time
+        # Ensure audio is in range [-1, 1]
+        audio = np.clip(audio / max(1.0, np.max(np.abs(audio))), -1.0, 1.0)
         
-        beat = beat_amplitude * np.exp(-5 * np.linspace(0, 1, self.buffer_size))
+        # When a beat happens, add an attack transient
+        if is_beat:
+            beat_env = np.exp(-np.linspace(0, 10, self.buffer_size))
+            audio += 0.3 * beat_env * np.random.randn(self.buffer_size)
+            # Reclip to ensure we're still in range
+            audio = np.clip(audio, -1.0, 1.0)
         
-        # Mix all components
-        audio_data = bass + mid + high + noise + beat
+        # Reshape for multiple channels if needed
+        if self.channels > 1:
+            audio = np.tile(audio.reshape(-1, 1), (1, self.channels))
         
-        # Normalize to range [-1, 1]
-        max_val = np.max(np.abs(audio_data))
-        if max_val > 0:
-            audio_data = audio_data / max_val
+        return audio
+    
+    def get_audio_data(self):
+        """API compatible with AudioCapture"""
+        return self.generate_audio_data()
         
-        # Update time index
-        self.time_index += self.buffer_size
-        
-        return audio_data
+    def start(self):
+        """API compatible with AudioCapture"""
+        return True
+    
+    def stop(self):
+        """API compatible with AudioCapture"""
+        pass
 
 
 def run_test(vis_type, num_leds, port=None, duration=10):
@@ -169,5 +198,30 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # Test the mock audio generator
+    import matplotlib.pyplot as plt
+    
+    generator = MockAudioGenerator()
+    
+    # Generate 10 buffers of audio
+    all_audio = []
+    for i in range(10):
+        audio = generator.generate_audio_data()
+        all_audio.append(audio)
+        
+    # Concatenate and plot
+    audio_concat = np.concatenate(all_audio)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(audio_concat)
+    plt.title("Mock Audio Waveform")
+    plt.xlabel("Sample")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.savefig("mock_audio.png")
+    plt.close()
+    
+    print("Generated mock audio and saved waveform plot to mock_audio.png")
+    
     args = parse_args()
     run_test(args.vis, args.leds, args.port, args.duration) 

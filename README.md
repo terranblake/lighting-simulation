@@ -75,30 +75,44 @@ This project allows you to generate LED animations in Python and send them to an
 - **Color Wipe**: Single colored dot that moves back and forth
 - **Pulse**: Entire strip pulsing with changing colors
 
-## Audio Visualizations
+## Audio Visualization
 
-The system now supports audio visualization that reacts to music or other sounds:
+The project now includes an audio visualization system that can capture system audio and visualize it on the LED strip. This feature requires additional software to be installed:
 
-- **Beat Pulse**: Pulses the entire strip on detected beats
-- **Spectrum**: Maps audio frequency bands to different sections of the LED strip
-- **Energy Beat**: Combines beat detection with energy levels for dynamic visuals
+1. **BlackHole Audio Driver** - For capturing system audio on macOS. You can install it with Homebrew:
+   ```
+   brew install --cask blackhole-2ch
+   ```
+   After installation, you'll need to configure a Multi-Output Device in macOS Sound settings to route audio to both your speakers and BlackHole.
 
-### Running Audio Visualizations
-
-1. List available audio devices:
-   ```bash
-   python -m python_scripts.audio_visualizer_demo --list-devices
+2. **Python Dependencies** - Additional Python packages are required:
+   ```
+   pip install -r requirements.txt
    ```
 
-2. Run the visualization demo (without LEDs):
-   ```bash
-   python -m python_scripts.audio_visualizer_demo --device BlackHole --vis beat_pulse
+### Using the Audio Visualizer
+
+1. Start the web interface:
+   ```
+   python python_scripts/web_visualizer.py
    ```
 
-3. Connect to Arduino and display on LED strip:
-   ```bash
-   python -m python_scripts.audio_led_controller --device BlackHole --vis beat_pulse --port [YOUR_PORT]
-   ```
+2. Open a web browser and go to http://localhost:5000
+
+3. Select visualization options:
+   - Choose an audio device (BlackHole 2ch for system audio)
+   - Select a visualization type (Spectrum, Beat Pulse, or Energy Beat)
+   - Enter the Arduino port
+   - Use "Mock Arduino" option if no hardware is connected
+   - Use "Synthetic audio" option to test without audio input
+
+4. Click "Start Visualization" to begin
+
+### Available Visualizations
+
+1. **Spectrum** - Displays the frequency spectrum across the LED strip
+2. **Beat Pulse** - Pulses the entire strip on detected beats
+3. **Energy Beat** - Creates flowing patterns based on audio energy and beats
 
 ## Hardware Testing
 

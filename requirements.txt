@@ -1,8 +1,29 @@
+# Serial Communication
 pyserial>=3.5
-pytest>=7.0.0
+
+# Audio Visualization
 numpy>=2.0.0
 pyaudio>=0.2.14
 sounddevice>=0.5.1
 matplotlib>=3.9.4
 scipy>=1.13.1
-librosa>=0.11.0 
+librosa>=0.11.0
+
+# Web Visualization
+flask>=3.0.0
+flask-socketio>=5.3.6
+python-socketio>=5.11.0
+python-engineio>=4.8.0
+
+# Python dependencies for LED audio visualization
+pyserial>=3.5
+numpy>=2.0.0
+pyaudio>=0.2.14
+sounddevice>=0.5.1
+matplotlib>=3.9.4
+scipy>=1.13.1
+librosa>=0.11.0
+Flask>=3.0.0
+Flask-SocketIO>=5.3.6
+python-socketio>=5.11.0
+python-engineio>=4.8.0 

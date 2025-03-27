@@ -7,7 +7,7 @@ that hardware integration is working properly.
 
 import time
 import argparse
-from animation_sender import LEDAnimationSender, ANIMATIONS
+from python_scripts.animation_sender import LEDAnimationSender, ANIMATIONS
 
 def run_integration_test(port, duration=3, fps=30):
     """Run a sequence of animations to test hardware integration"""

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Audio Visualizations Module
-Provides different visualizations for audio data on LED strips
+Audio Visualizations
+Provides visualizations for LED strips based on audio input
 """
+import time
 import math
 import numpy as np
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Dict, Tuple, Union, Any, Optional
 
-# Constants
+# LED strip constants
 NUM_LEDS = 60
 
-# Color definitions
+# Color constants
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
@@ -20,429 +21,341 @@ CYAN = (0, 255, 255)
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 
-# Base colors for visualizations
-RAINBOW_COLORS = [RED, (255, 127, 0), YELLOW, GREEN, BLUE, (75, 0, 130), (148, 0, 211)]
-
-
 class BaseVisualizer:
-    """Base class for all audio visualizations"""
+    """Base class for audio visualizers"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
-        """
-        Initialize base visualizer
-        
-        Args:
-            num_leds: Number of LEDs in the strip
-        """
+        """Initialize with number of LEDs"""
         self.num_leds = num_leds
-        self.colors = [(0, 0, 0)] * num_leds  # Start with all LEDs off
+        self.led_colors = [(0, 0, 0)] * num_leds
         self.params = {
-            'brightness': 1.0,      # Global brightness multiplier
-            'sensitivity': 1.0,     # Sensitivity to audio input
-            'color_scheme': 0,      # Index of color scheme to use
-            'speed': 1.0,           # Animation speed multiplier
-            'decay': 0.8,           # How quickly effects fade (0-1)
+            'brightness': 1.0,
+            'sensitivity': 1.0,
+            'speed': 1.0,
+            'color_mode': 'dynamic'
         }
     
-    def update(self, is_beat: bool, fft_data: np.ndarray, bands: np.ndarray) -> List[Tuple[int, int, int]]:
-        """
-        Update visualization based on audio data
-        
-        Args:
-            is_beat: Whether a beat was detected
-            fft_data: FFT data
-            bands: Frequency band energies
-            
-        Returns:
-            List of RGB tuples for each LED
-        """
-        # Implement in subclasses
-        return [(0, 0, 0)] * self.num_leds
-    
-    def set_param(self, param_name: str, value: float) -> None:
-        """Set a visualization parameter"""
+    def set_param(self, param_name: str, value: Any) -> None:
+        """Set a parameter value"""
         if param_name in self.params:
             self.params[param_name] = value
     
-    def get_colors(self) -> List[Tuple[int, int, int]]:
-        """Get the current colors for the LED strip"""
-        # Apply global brightness
-        brightness = self.params['brightness']
-        if brightness < 1.0:
-            return [self._scale_color(color, brightness) for color in self.colors]
-        return self.colors
+    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
+        """Update the LED colors based on audio data"""
+        # This should be overridden by subclasses
+        return self.flatten_colors()
     
-    @staticmethod
-    def _scale_color(color: Tuple[int, int, int], scale: float) -> Tuple[int, int, int]:
-        """Scale RGB color by a factor"""
-        return (
-            int(color[0] * scale),
-            int(color[1] * scale),
-            int(color[2] * scale)
-        )
+    def get_led_colors(self) -> List[int]:
+        """Get flattened LED colors as [r1, g1, b1, r2, g2, b2, ...]"""
+        return self.flatten_colors()
     
-    @staticmethod
-    def _blend_colors(color1: Tuple[int, int, int], color2: Tuple[int, int, int], 
-                     ratio: float) -> Tuple[int, int, int]:
-        """Blend two colors with the given ratio (0.0 = color1, 1.0 = color2)"""
-        r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
-        g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
-        b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+    def flatten_colors(self) -> List[int]:
+        """Convert LED colors to flat list for Arduino"""
+        flattened = []
+        for r, g, b in self.led_colors:
+            flattened.extend([int(r), int(g), int(b)])
+        return flattened
+    
+    def scale_color(self, color: Tuple[int, int, int], scale: float) -> Tuple[int, int, int]:
+        """Scale a color by a factor"""
+        scale = max(0.0, min(1.0, scale))
+        r, g, b = color
+        return (int(r * scale), int(g * scale), int(b * scale))
+    
+    def blend_colors(self, color1: Tuple[int, int, int], color2: Tuple[int, int, int], 
+                      blend_factor: float) -> Tuple[int, int, int]:
+        """Blend two colors together"""
+        blend_factor = max(0.0, min(1.0, blend_factor))
+        r1, g1, b1 = color1
+        r2, g2, b2 = color2
+        r = int(r1 * (1 - blend_factor) + r2 * blend_factor)
+        g = int(g1 * (1 - blend_factor) + g2 * blend_factor)
+        b = int(b1 * (1 - blend_factor) + b2 * blend_factor)
         return (r, g, b)
     
-    @staticmethod
-    def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
-        """Convert HSV color to RGB"""
+    def hsv_to_rgb(self, h: float, s: float, v: float) -> Tuple[int, int, int]:
+        """Convert HSV to RGB color"""
         h = h % 360
-        h_i = int(h / 60)
-        f = h / 60 - h_i
-        p = v * (1 - s)
-        q = v * (1 - s * f)
-        t = v * (1 - s * (1 - f))
+        s = max(0.0, min(1.0, s))
+        v = max(0.0, min(1.0, v))
         
-        if h_i == 0:
-            r, g, b = v, t, p
-        elif h_i == 1:
-            r, g, b = q, v, p
-        elif h_i == 2:
-            r, g, b = p, v, t
-        elif h_i == 3:
-            r, g, b = p, q, v
-        elif h_i == 4:
-            r, g, b = t, p, v
+        c = v * s
+        x = c * (1 - abs((h / 60) % 2 - 1))
+        m = v - c
+        
+        if h < 60:
+            r, g, b = c, x, 0
+        elif h < 120:
+            r, g, b = x, c, 0
+        elif h < 180:
+            r, g, b = 0, c, x
+        elif h < 240:
+            r, g, b = 0, x, c
+        elif h < 300:
+            r, g, b = x, 0, c
         else:
-            r, g, b = v, p, q
+            r, g, b = c, 0, x
         
-        return (int(r * 255), int(g * 255), int(b * 255))
+        r = int((r + m) * 255)
+        g = int((g + m) * 255)
+        b = int((b + m) * 255)
+        
+        return (r, g, b)
 
 
 class BeatPulseVisualizer(BaseVisualizer):
-    """Visualization that pulses with the beat"""
+    """Visualizer that pulses on detected beats"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
+        self.hue = 0
+        self.pulse_level = 0
+        self.decay = 0.85  # How quickly pulse fades
+        self.speed = 2     # How quickly hue changes
         
-        # Additional parameters
-        self.params.update({
-            'pulse_length': 0.7,    # Length of pulse (0-1)
-            'color_variation': 0.3,  # How much to vary color (0-1)
-        })
-        
-        # State variables
-        self.pulse_intensity = 0.0
-        self.color_offset = 0.0
-        self.base_color_index = 0
-        self.color_schemes = [
-            [RED, PURPLE, RED, PURPLE],                      # Red-Purple
-            [BLUE, CYAN, BLUE, CYAN],                    # Blue-Cyan
-            [GREEN, YELLOW, GREEN, YELLOW],              # Green-Yellow
-            RAINBOW_COLORS,                              # Rainbow
-            [WHITE, (200, 200, 200), WHITE, (200, 200, 200)]  # White
+        # Predefine colors for different pulse intensities
+        self.colors = [
+            RED, BLUE, GREEN, PURPLE, YELLOW, CYAN
         ]
     
-    def update(self, is_beat: bool, fft_data: np.ndarray, bands: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Update visualization based on audio data"""
-        # Get parameters
+    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
+        """Update visualization based on audio data and beat detection"""
+        # Decay existing pulse
+        self.pulse_level *= self.decay
+        
+        # If beat detected, set pulse to max
+        if beat_detected:
+            self.pulse_level = 1.0
+            # Change color on beat
+            self.hue = (self.hue + self.speed * 10) % 360
+        
+        # Slowly shift hue in any case
+        self.hue = (self.hue + self.speed) % 360
+        
+        # Apply brightness from parameters
+        brightness = self.params['brightness']
         sensitivity = self.params['sensitivity']
-        decay = self.params['decay']
-        pulse_length = self.params['pulse_length']
-        color_scheme = int(min(self.params['color_scheme'], len(self.color_schemes) - 1))
         
-        # Update state based on beat
-        if is_beat:
-            # Set pulse to max intensity
-            self.pulse_intensity = 1.0
+        # Create pulse effect
+        if frequency_bands is not None and len(frequency_bands) > 0:
+            # Use frequency information to influence color
+            bass_level = np.mean(frequency_bands[:4]) if len(frequency_bands) >= 4 else 0
+            mid_level = np.mean(frequency_bands[4:12]) if len(frequency_bands) >= 12 else 0
+            high_level = np.mean(frequency_bands[12:]) if len(frequency_bands) >= 16 else 0
             
-            # Change base color on beat occasionally
-            if random.random() < 0.3:
-                self.base_color_index = (self.base_color_index + 1) % len(self.color_schemes[color_scheme])
+            # Normalize levels
+            max_level = max(bass_level, mid_level, high_level, 1e-10)
+            bass_norm = bass_level / max_level
+            mid_norm = mid_level / max_level
+            high_norm = high_level / max_level
+            
+            # Create color based on frequency distribution
+            r = int(255 * bass_norm * brightness)
+            g = int(255 * mid_norm * brightness)
+            b = int(255 * high_norm * brightness)
+            color = (r, g, b)
         else:
-            # Decay pulse
-            self.pulse_intensity *= decay
-        
-        # Get base color
-        base_color = self.color_schemes[color_scheme][self.base_color_index]
-        
-        # Calculate colors for each LED
-        new_colors = []
-        for i in range(self.num_leds):
-            # Calculate position in the pulse (0-1)
-            pos = float(i) / self.num_leds
-            
-            # Only light LEDs within the pulse length
-            in_pulse = pos < pulse_length
-            
-            if in_pulse:
-                # Normalize position within pulse
-                pulse_pos = pos / pulse_length
-                
-                # Calculate intensity at this position (center is brightest)
-                position_intensity = 1.0 - abs(2 * pulse_pos - 1)
-                
-                # Apply beat intensity
-                led_intensity = position_intensity * self.pulse_intensity * sensitivity
-                
-                # Small color variation based on position
-                hue_offset = self.params['color_variation'] * position_intensity * 30
-                if isinstance(base_color, tuple):
-                    # Convert to HSV, adjust hue, convert back to RGB
-                    r, g, b = base_color
-                    h, s, v = self._rgb_to_hsv(r, g, b)
-                    h = (h + hue_offset) % 360
-                    color = self._hsv_to_rgb(h, s, v)
-                else:
-                    color = base_color
-                
-                # Scale by intensity
-                color = self._scale_color(color, led_intensity)
+            # Use regular pulse color
+            if self.params['color_mode'] == 'dynamic':
+                color = self.hsv_to_rgb(self.hue, 1.0, brightness)
             else:
-                color = BLACK
-            
-            new_colors.append(color)
+                # Use fixed color from the cycle
+                color_idx = int(time.time() / 2) % len(self.colors)
+                color = self.scale_color(self.colors[color_idx], brightness)
         
-        self.colors = new_colors
-        return self.colors
-    
-    @staticmethod
-    def _rgb_to_hsv(r: int, g: int, b: int) -> Tuple[float, float, float]:
-        """Convert RGB to HSV color space"""
-        r, g, b = r / 255.0, g / 255.0, b / 255.0
-        mx = max(r, g, b)
-        mn = min(r, g, b)
-        df = mx - mn
-        if mx == mn:
-            h = 0
-        elif mx == r:
-            h = (60 * ((g - b) / df) + 360) % 360
-        elif mx == g:
-            h = (60 * ((b - r) / df) + 120) % 360
-        elif mx == b:
-            h = (60 * ((r - g) / df) + 240) % 360
-        if mx == 0:
-            s = 0
-        else:
-            s = df / mx
-        v = mx
-        return (h, s, v)
+        # Apply pulse scaling
+        pulse_color = self.scale_color(color, self.pulse_level * sensitivity)
+        
+        # Update all LEDs with pulse color
+        self.led_colors = [pulse_color] * self.num_leds
+        
+        return self.flatten_colors()
 
 
 class SpectrumVisualizer(BaseVisualizer):
-    """Visualization that shows audio frequency spectrum"""
+    """Visualizer that shows frequency spectrum across the LED strip"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
-        
-        # Additional parameters
-        self.params.update({
-            'smoothing': 0.7,      # Smoothing factor between frames (0-1)
-            'baseline': 0.1,       # Baseline brightness when no audio
-            'normalize': True,     # Whether to normalize the spectrum
-        })
-        
-        # Previous band values for smoothing
-        self.prev_values = np.zeros(num_leds)
-        
-        # Color gradient for visualization
-        self.color_schemes = [
-            [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 255, 0), (255, 0, 0)],  # Blue to Red
-            [(0, 0, 255), (255, 0, 255), (255, 0, 0)],  # Blue to Purple to Red
-            [(0, 255, 0), (255, 255, 0), (255, 0, 0)],  # Green to Yellow to Red
-            RAINBOW_COLORS,  # Rainbow
-            [(0, 0, 255), (255, 255, 255)]  # Blue to White
-        ]
+        self.max_height = 0.0  # For normalization
+        self.decay = 0.9       # Decay factor for max height
+        self.smoothing = 0.7   # Smoothing factor for band transitions
+        self.previous_bands = None
     
-    def update(self, is_beat: bool, fft_data: np.ndarray, bands: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Update visualization based on audio data"""
+    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
+        """Update visualization with frequency spectrum"""
+        if frequency_bands is None or len(frequency_bands) == 0:
+            return self.flatten_colors()
+        
         # Get parameters
+        brightness = self.params['brightness']
         sensitivity = self.params['sensitivity']
-        smoothing = self.params['smoothing']
-        baseline = self.params['baseline']
-        color_scheme_idx = int(min(self.params['color_scheme'], len(self.color_schemes) - 1))
-        color_scheme = self.color_schemes[color_scheme_idx]
         
-        # Normalize bands data to 0-1 range
-        if len(bands) == 0:
-            normalized_bands = np.zeros(self.num_leds)
+        # Apply smoothing to bands if we have previous data
+        if self.previous_bands is not None:
+            smoothed_bands = []
+            for i, band in enumerate(frequency_bands):
+                prev = self.previous_bands[i] if i < len(self.previous_bands) else 0
+                smoothed = prev * self.smoothing + band * (1 - self.smoothing)
+                smoothed_bands.append(smoothed)
+            frequency_bands = smoothed_bands
+        
+        # Store for next update
+        self.previous_bands = frequency_bands.copy()
+        
+        # Find max value for normalization
+        current_max = np.max(frequency_bands)
+        if current_max > self.max_height:
+            self.max_height = current_max
         else:
-            # Apply sensitivity
-            scaled_bands = bands * sensitivity
-            
-            # Normalize if needed
-            if self.params['normalize'] and np.max(scaled_bands) > 0:
-                normalized_bands = scaled_bands / np.max(scaled_bands)
-            else:
-                normalized_bands = np.clip(scaled_bands, 0, 1)
-            
-            # Add baseline
-            normalized_bands = baseline + (1 - baseline) * normalized_bands
-            
-            # Resize to match LED count
-            if len(normalized_bands) != self.num_leds:
-                # Simple linear interpolation
-                old_indices = np.linspace(0, len(normalized_bands) - 1, len(normalized_bands))
-                new_indices = np.linspace(0, len(normalized_bands) - 1, self.num_leds)
-                normalized_bands = np.interp(new_indices, old_indices, normalized_bands)
+            self.max_height = self.max_height * self.decay + current_max * (1 - self.decay)
         
-        # Apply smoothing with previous values
-        smoothed_values = smoothing * self.prev_values + (1 - smoothing) * normalized_bands
-        self.prev_values = smoothed_values
+        # Normalize bands
+        if self.max_height > 0:
+            normalized_bands = [min(1.0, b / self.max_height * sensitivity) for b in frequency_bands]
+        else:
+            normalized_bands = [0] * len(frequency_bands)
         
-        # Map values to colors
-        new_colors = []
-        for i, value in enumerate(smoothed_values):
-            # Map value to position in color gradient
-            if value <= 0:
-                color = BLACK
-            else:
-                # Map value to position in color gradient
-                color_pos = value
-                color_idx = color_pos * (len(color_scheme) - 1)
-                idx1 = int(color_idx)
-                idx2 = min(idx1 + 1, len(color_scheme) - 1)
-                color_ratio = color_idx - idx1
+        # Map frequency bands to LEDs
+        led_values = self.map_bands_to_leds(normalized_bands)
+        
+        # Apply colors based on frequency
+        for i in range(self.num_leds):
+            value = led_values[i]
+            
+            # Map each LED to a color based on position (frequency)
+            hue = (i / self.num_leds) * 360  # Full color spectrum
+            color = self.hsv_to_rgb(hue, 1.0, value * brightness)
+            self.led_colors[i] = color
+        
+        return self.flatten_colors()
+    
+    def map_bands_to_leds(self, bands: List[float]) -> List[float]:
+        """Map frequency bands to LED values using interpolation"""
+        # Simple case: same number of bands as LEDs
+        if len(bands) == self.num_leds:
+            return bands
+        
+        # Need to interpolate
+        led_values = [0] * self.num_leds
+        
+        # Use linear interpolation to map fewer bands to more LEDs
+        if len(bands) < self.num_leds:
+            for i in range(self.num_leds):
+                band_idx = (i / self.num_leds) * (len(bands) - 1)
+                band_idx_floor = int(band_idx)
+                band_idx_ceil = min(band_idx_floor + 1, len(bands) - 1)
+                blend = band_idx - band_idx_floor
                 
-                # Blend between the two nearest colors
-                color = self._blend_colors(
-                    color_scheme[idx1],
-                    color_scheme[idx2],
-                    color_ratio
-                )
-            
-            new_colors.append(color)
+                led_values[i] = bands[band_idx_floor] * (1 - blend) + bands[band_idx_ceil] * blend
         
-        self.colors = new_colors
-        return self.colors
+        # Or average multiple bands to map to fewer LEDs
+        else:
+            for i in range(self.num_leds):
+                start_band = int((i / self.num_leds) * len(bands))
+                end_band = int(((i + 1) / self.num_leds) * len(bands))
+                if start_band == end_band:
+                    led_values[i] = bands[start_band]
+                else:
+                    led_values[i] = np.mean(bands[start_band:end_band])
+        
+        return led_values
 
 
 class EnergyBeatVisualizer(BaseVisualizer):
-    """Visualization that reacts to both beats and energy levels"""
+    """Visualizer that reacts to both beats and audio energy"""
     
     def __init__(self, num_leds: int = NUM_LEDS):
         super().__init__(num_leds)
-        
-        # Additional parameters
-        self.params.update({
-            'energy_scale': 1.5,    # Scaling factor for energy response
-            'beat_intensity': 2.0,  # How much to amplify on beat
-            'color_speed': 0.2,     # Speed of color cycling
-        })
-        
-        # State variables
-        self.energy_levels = np.zeros(self.num_leds)
-        self.hue_offset = 0.0
-        self.beat_time = 0.0
+        self.energy = 0.0
+        self.energy_decay = 0.9
+        self.beat_decay = 0.7
+        self.beat_intensity = 0.0
+        self.base_hue = 0
+        self.hue_shift_speed = 0.5
     
-    def update(self, is_beat: bool, fft_data: np.ndarray, bands: np.ndarray) -> List[Tuple[int, int, int]]:
-        """Update visualization based on audio data"""
+    def update(self, audio_data=None, fft_data=None, beat_detected=False, frequency_bands=None) -> List[int]:
+        """Update visualization based on audio energy and beats"""
         # Get parameters
+        brightness = self.params['brightness']
         sensitivity = self.params['sensitivity']
-        decay = self.params['decay']
-        energy_scale = self.params['energy_scale']
-        beat_intensity = self.params['beat_intensity']
-        color_speed = self.params['color_speed']
         
-        # Calculate overall energy from bands
-        if len(bands) > 0:
-            # Get average energy across all bands
-            avg_energy = np.mean(bands) * sensitivity * energy_scale
-            
-            # If beat detected, amplify energy
-            if is_beat:
-                avg_energy *= beat_intensity
-                self.beat_time = 1.0
-            else:
-                self.beat_time *= decay
-                
-            # Shift energy levels
-            self.energy_levels = np.roll(self.energy_levels, 1)
-            
-            # Set new energy at the center
-            center = self.num_leds // 2
-            self.energy_levels[center] = avg_energy
-            
-            # Smooth the energy levels (moving average)
-            kernel = np.array([0.25, 0.5, 0.25])
-            for i in range(1, self.num_leds - 1):
-                # Apply smoothing kernel
-                self.energy_levels[i] = (
-                    self.energy_levels[i-1] * kernel[0] +
-                    self.energy_levels[i] * kernel[1] +
-                    self.energy_levels[i+1] * kernel[2]
-                )
-            
-            # Apply decay to all values
-            self.energy_levels *= decay
+        # Calculate audio energy if we have audio data
+        if audio_data is not None and len(audio_data) > 0:
+            # Compute RMS energy
+            if audio_data.ndim > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            current_energy = np.sqrt(np.mean(audio_data ** 2)) * sensitivity
+            self.energy = max(current_energy, self.energy * self.energy_decay)
+        else:
+            self.energy *= self.energy_decay
         
-        # Update hue offset
-        self.hue_offset = (self.hue_offset + color_speed) % 360
+        # Update beat intensity
+        if beat_detected:
+            self.beat_intensity = 1.0
+            # Change base hue on beat
+            self.base_hue = (self.base_hue + 30) % 360
+        else:
+            self.beat_intensity *= self.beat_decay
         
-        # Create colors for each LED
-        new_colors = []
-        for i, energy in enumerate(self.energy_levels):
-            # Map position to base hue (0-360)
-            pos_hue = (i * 360 / self.num_leds + self.hue_offset) % 360
-            
-            # Saturation and value based on energy
-            saturation = min(1.0, 0.3 + energy * 0.7)
-            value = min(1.0, energy)
-            
-            # Boost on beat
-            if self.beat_time > 0:
-                value = min(1.0, value + self.beat_time * 0.5)
-            
-            # Convert to RGB
-            color = self._hsv_to_rgb(pos_hue, saturation, value)
-            new_colors.append(color)
+        # Shift base hue slowly over time
+        self.base_hue = (self.base_hue + self.hue_shift_speed) % 360
         
-        self.colors = new_colors
-        return self.colors
+        # Create energy-based visualization
+        for i in range(self.num_leds):
+            # Position-based effects
+            position = i / self.num_leds
+            
+            # Create different effects for different sections
+            if position < 0.33:  # First third: bass responsive
+                hue = (self.base_hue + 120) % 360
+                intensity = self.energy * (1 - position * 2) + self.beat_intensity
+            elif position < 0.67:  # Middle third: mid responsive
+                hue = (self.base_hue + 240) % 360
+                intensity = self.energy * (1 - abs(position - 0.5) * 4) + self.beat_intensity * 0.7
+            else:  # Last third: high responsive
+                hue = self.base_hue
+                intensity = self.energy * (position * 2 - 1) + self.beat_intensity * 0.5
+            
+            # Apply color
+            intensity = min(1.0, intensity) * brightness
+            self.led_colors[i] = self.hsv_to_rgb(hue, 1.0, intensity)
+        
+        return self.flatten_colors()
 
 
-# Dictionary mapping visualization names to their classes
+# Register available visualizations
 VISUALIZATIONS = {
     'beat_pulse': BeatPulseVisualizer,
     'spectrum': SpectrumVisualizer,
     'energy_beat': EnergyBeatVisualizer,
 }
 
-
-def create_visualizer(name: str, num_leds: int = NUM_LEDS) -> BaseVisualizer:
+def create_visualizer(vis_type: str, num_leds: int = NUM_LEDS) -> BaseVisualizer:
     """Factory function to create a visualizer by name"""
-    if name in VISUALIZATIONS:
-        return VISUALIZATIONS[name](num_leds)
-    else:
-        # Default to beat pulse
-        print(f"Visualization '{name}' not found, using beat_pulse")
-        return BeatPulseVisualizer(num_leds)
+    if vis_type not in VISUALIZATIONS:
+        print(f"Warning: Unknown visualizer type '{vis_type}'. Using 'spectrum' instead.")
+        vis_type = 'spectrum'
+    
+    return VISUALIZATIONS[vis_type](num_leds=num_leds)
 
 
 if __name__ == "__main__":
-    # Demo visualization with random data
-    from time import sleep
+    # Test code for visualizers
+    print("Available visualizations:")
+    for name in VISUALIZATIONS:
+        print(f" - {name}")
     
-    # Create visualizer
-    visualizer = create_visualizer('beat_pulse')
+    # Simple simulation with fake data
+    vis = create_visualizer('spectrum')
     
-    # Generate some fake data
+    # Create fake frequency bands
+    bands = np.zeros(16)
     for i in range(100):
-        # Fake a beat every 0.5 seconds
-        is_beat = (i % 5) == 0
+        # Simulate changing bands
+        for j in range(16):
+            bands[j] = 0.5 + 0.5 * np.sin(i * 0.1 + j * 0.2)
         
-        # Fake FFT data
-        fft_data = np.random.rand(512) * (0.5 + 0.5 * (is_beat))
-        
-        # Fake frequency bands
-        bands = np.array([
-            np.random.rand() * (0.5 + 0.5 * (is_beat and j % 3 == 0))
-            for j in range(8)
-        ])
-        
-        # Update visualizer
-        colors = visualizer.update(is_beat, fft_data, bands)
-        
-        # Print a simple visualization
-        intensity = sum(sum(c) for c in colors) / (NUM_LEDS * 3 * 255)
-        bar_length = int(intensity * 50)
-        print(f"{'#' * bar_length}{' ' * (50 - bar_length)} | Beat: {is_beat}")
-        
-        sleep(0.1) 
+        # Update and get colors
+        colors = vis.update(frequency_bands=bands, beat_detected=(i % 10 == 0))
+        print(f"Frame {i}: {len(colors) // 3} LEDs, beat: {(i % 10 == 0)}") 
