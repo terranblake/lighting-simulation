@@ -834,6 +834,9 @@ class CenterGradientVisualizer(BaseVisualizer):
         super().__init__(num_leds)
         # Current base color (hue)
         self.current_hue = 0.0
+        # Fixed color mode
+        self.use_fixed_color = False
+        self.fixed_color_hue = 0.0  # 0.0-1.0 range for HSV
         # Color rotation speed
         self.hue_shift_speed = 0.01
         # Color change on beat
@@ -876,14 +879,18 @@ class CenterGradientVisualizer(BaseVisualizer):
             self.mid_energy *= self.energy_decay
             self.high_energy *= self.energy_decay
         
-        # Update base color
-        if beat_detected:
-            # Jump to a new color on beat
-            self.current_hue = (self.current_hue + self.beat_hue_jump) % 1.0
+        # Update base color - but only if not using fixed color
+        if not self.use_fixed_color:
+            if beat_detected:
+                # Jump to a new color on beat
+                self.current_hue = (self.current_hue + self.beat_hue_jump) % 1.0
+            else:
+                # Gradually shift hue based on bass energy
+                hue_shift = self.hue_shift_speed * (1.0 + self.bass_energy * 2)
+                self.current_hue = (self.current_hue + hue_shift) % 1.0
         else:
-            # Gradually shift hue based on bass energy
-            hue_shift = self.hue_shift_speed * (1.0 + self.bass_energy * 2)
-            self.current_hue = (self.current_hue + hue_shift) % 1.0
+            # Use the fixed color
+            self.current_hue = self.fixed_color_hue
         
         # Calculate total energy for intensity
         total_energy = self.bass_energy + self.mid_energy * 0.8 + self.high_energy * 0.6
@@ -954,6 +961,48 @@ class CenterGradientVisualizer(BaseVisualizer):
                 self.transition_smoothing = max(0.0, min(0.9, value))
             except ValueError:
                 pass
+        elif param == "use_fixed_color":
+            self.use_fixed_color = bool(value)
+        elif param == "fixed_color_hue":
+            try:
+                value = float(value)
+                self.fixed_color_hue = max(0.0, min(1.0, value))
+            except ValueError:
+                pass
+        elif param == "color":
+            # Allow setting a color by name or RGB
+            if value in {"red", "green", "blue", "yellow", "purple", "cyan", "white"}:
+                # Map color names to hue values
+                color_map = {
+                    "red": 0.0,
+                    "yellow": 0.16,
+                    "green": 0.33,
+                    "cyan": 0.5,
+                    "blue": 0.66,
+                    "purple": 0.83,
+                    "white": 0.0  # Special case, will set saturation to 0 in update
+                }
+                self.fixed_color_hue = color_map[value]
+                self.use_fixed_color = True
+            elif isinstance(value, tuple) and len(value) == 3:
+                # Convert RGB to HSV, extract hue
+                r, g, b = value
+                r, g, b = r / 255.0, g / 255.0, b / 255.0
+                max_val = max(r, g, b)
+                min_val = min(r, g, b)
+                
+                if max_val == min_val:
+                    h = 0  # Grayscale
+                elif max_val == r:
+                    h = ((g - b) / (max_val - min_val)) % 6
+                elif max_val == g:
+                    h = ((b - r) / (max_val - min_val)) + 2
+                else:
+                    h = ((r - g) / (max_val - min_val)) + 4
+                
+                h = h / 6.0  # Convert to 0-1 range
+                self.fixed_color_hue = h
+                self.use_fixed_color = True
 
 
 # Register available visualizations
